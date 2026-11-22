@@ -210,3 +210,13 @@ export const Memory = defineExtension({
 export function dateLine() {
   return new Date().toLocaleString("ru-RU", { weekday: "long", day: "numeric", month: "long", year: "numeric", hour: "2-digit", minute: "2-digit" });
 }
+
+// Команда остановки без модели: «стоп», «стой», «отмена», «хватит», «останови всё/всех», «stop», «/stop»; «стоп 263», «стоп #263», «/stop 263».
+// Возвращает {all:true} | {n:число} | null (не команда: «стоп-кадр сделай» и т.п.)
+export function parseStop(text) {
+  const t = String(text ?? "").toLowerCase().replace(/ё/g, "е").replace(/[.!?…,;:"«»()]+/g, " ").replace(/\s+/g, " ").trim();
+  if (!t) return null;
+  const m = /^\/?(?:стоп|стой|отмена|отмени|хватит|stop|cancel|останови(?:сь)?(?: (?:все|всех|всё|помощников|всё это))?|остановить (?:все|всех|всё))(?: (?:#|№)?(\d+))?$/.exec(t.replace(/(?<=\s)(#|№)\s+(?=\d)/g, "$1"));
+  if (!m) return null;
+  return m[1] ? { n: Number(m[1]) } : { all: true };
+}

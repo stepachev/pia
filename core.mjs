@@ -11,7 +11,7 @@ import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { DatabaseSync } from "node:sqlite";
 import { STREAM, RETRY, IDLE_MS, MAX_RESTARTS, activity, currentTool, judge, LIMITS } from "./guard.mjs";
-import { APP, WORKDIR, ROLES, makeModels, Files, Web, Browser, Memory, ensureMemory } from "./shared.mjs";
+import { parseStop, APP, WORKDIR, ROLES, makeModels, Files, Web, Browser, Memory, ensureMemory } from "./shared.mjs";
 import { ref } from "./providers.mjs";
 import { buildMessage } from "./attachments.mjs";
 import { imageTrimHook, flatContent, imageTokensOf, makePathResolver } from "./image-context.mjs";
@@ -85,18 +85,24 @@ const Helpers = defineExtension({ name: "helpers", tools: [
     description: "Остановить помощника (или всех, если n не указан).",
     parameters: obj({ n: opt(num()) }),
     execute: async (args) => {
-      const list = [...runningHelpers.values()].filter((x) => args.n == null || x.n === args.n);
-      if (!list.length) return ok("Некого останавливать.");
-      for (const r of list) { r.stopped = true; (await harness.conversation(r.conv, context))?.abort(context).catch(() => {}); }
-      return ok(`Остановил: ${list.map((r) => "#" + r.n).join(", ")}.`);
+      const list = await stopHelpers(args.n);
+      return ok(list.length ? `Остановил: ${list.map((r) => "#" + r.n).join(", ")}.` : "Некого останавливать.");
     },
   }),
 ] });
+// Остановить помощника n (или всех) — и инструмент helper_stop, и команда «стоп» без модели
+async function stopHelpers(n) {
+  const list = [...runningHelpers.values()].filter((x) => n == null || x.n === n);
+  for (const r of list) { r.stopped = true; (await harness.conversation(r.conv, context))?.abort(context).catch(() => {}); }
+  return list;
+}
+const isLimitError = (s) => /429|rate.?limit|usage.?limit|limit (?:reached|exceeded)|quota|overloaded|model_error|insufficient|лимит/i.test(typeof s === "string" ? s : JSON.stringify(s ?? ""));
 const HELPERS_FILE = `${APP}/helpers.json`;
 const store = (() => { try { return JSON.parse(fs.readFileSync(HELPERS_FILE, "utf8")); } catch { return { next: 1, items: {} }; } })();
 const RUNTIME_KEYS = new Set(["progress", "wakeNote", "restarts", "giveUp"]);   // служебное сторожа — в файл не пишем
 const saveStore = () => fs.writeFileSync(HELPERS_FILE, JSON.stringify(store, (k, v) => (RUNTIME_KEYS.has(k) ? undefined : v), 2));
 const runningHelpers = new Map();   // ключ → запись работающего помощника
+let pendingNotes = [];              // системные заметки для главного (напр. «пользователь всё остановил»)
 let pendingReports = [];            // отчёты, которые ещё не отданы главному
 let onReport = () => {};
 let closing = false;
@@ -130,7 +136,7 @@ function watchHelper(key, rec) {
         const note = rec.wakeNote; rec.wakeNote = null; rec.restarts = (rec.restarts ?? 0) + 1;
         settled = await (await conv.submit({ type: "input", content: note, requestId: `helper:${key}:wd${rec.restarts}` }, context)).wait(context);
       }
-      if (settled.status !== "done") text = rec.stopped ? "Остановлен по просьбе." : rec.giveUp ? `Остановлен сторожем: ${rec.giveUp}.` : `Не справился (${settled.reason ?? settled.status}).`;
+      if (settled.status !== "done") text = rec.stopped ? "Остановлен по просьбе." : rec.giveUp ? `Остановлен сторожем: ${rec.giveUp}.` : isLimitError(settled) ? "Лимит модели исчерпан (429 / usage limit) — остановился, повторы не помогут. Нужно подождать сброса лимита или сменить провайдера." : `Не справился (${settled.reason ?? settled.status}).`;
       else {
         const e = await conv.commit((tx) => tx.entry(AssistantEntry, settled.answer), context);
         text = (e?.model?.[0]?.content ?? []).filter((c) => c.type === "text").map((c) => c.text).join("").trim() || "(пустой отчёт)";
@@ -480,6 +486,23 @@ export async function openCore() {
   // Сообщение пользователя из любого окна. Возвращает запись ленты (её seq — ответ /api/send).
   async function send({ text = "", images = [], tokens = [], pastes = [], source = "raycast" }) {
     const line = text.trim();
+    // Команда остановки — без модели (работает и при исчерпанном лимите)
+    const stopCmd = !images.length && !tokens.length ? parseStop(line) : null;
+    if (stopCmd) {
+      const item = feed.addUser({ text, source });
+      const list = await stopHelpers(stopCmd.all ? null : stopCmd.n);
+      const wasBusy = busy;
+      if (wasBusy) stop();
+      const msg = list.length ? `Остановил: ${list.map((r) => "#" + r.n).join(", ")}.`
+        : stopCmd.n != null ? `Помощник #${stopCmd.n} сейчас не работает.` : wasBusy ? "Остановил." : "Сейчас никто не работает.";
+      feed.addService(msg);
+      if (list.length || wasBusy) {
+        // Заметка для главного: увидит при следующем ответе (без запуска модели)
+        const note = `[Система] Пользователь написал «${line}» и остановил ${list.length ? "помощников " + list.map((r) => "#" + r.n).join(", ") : "текущий ответ"}. Отчёты об остановке могут прийти — не перезапускай их сам, пока пользователь не попросит.`;
+        pendingNotes.push(note);
+      }
+      return item;
+    }
     if (busy && STOP_WORDS.includes(line.toLowerCase()) && !images.length && !tokens.length) {
       const item = feed.addUser({ text, source });
       stop();
@@ -495,6 +518,10 @@ export async function openCore() {
       tok.set(label, file); t += (t.trim() ? " " : "") + label;
     }
     const m = await buildMessage(t, tok);
+    if (pendingNotes.length) {   // системная заметка об остановке — главный увидит её с этим сообщением
+      const head = pendingNotes.splice(0).join("\n");
+      m.content = typeof m.content === "string" ? `${head}\n\n${m.content}` : [{ type: "text", text: head }, ...m.content];
+    }
     let card = m.card;
     for (const [token, full] of pastes) card = card.split(full).join(token);   // большие вставки в терминале — свёрнутыми
     const key = typeof m.content === "string" ? m.content : txt({ content: m.content });

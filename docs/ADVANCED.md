@@ -83,3 +83,7 @@ OpenRouter (`pia login openrouter`): модели разных авторов ч
 
 ## Автозапуск и «Объекты входа» (SMAppService)
 Службы `com.pi-agent.server` (сервер + память раз в 30 минут изнутри) и `com.pi-agent.chat` (окно, `--hidden`) лежат **внутри** `pia.app/Contents/Library/LaunchAgents` (plist генерирует `mac-app/build.sh` из `launchd/*.plist.template`) и регистрируются через `SMAppService` (`pia-app --register-only`; окно делает это и само при каждом запуске). В Системных настройках → Объекты входа это одна строка «pia» со значком приложения. Исполняемый файл окна — `Contents/MacOS/pia-app`, рантайм Node — `Contents/MacOS/pia`. `runtime-bin/node` — обёртка «node» → рантайм pia для MCP-серверов (PATH службы). Старые plist из `~/Library/LaunchAgents` build.sh переносит в `~/.pi-agent/backups/legacy-agents-*`. Состояние: `pia-app --autostart-status`.
+
+## Остановка без модели
+
+Сообщение целиком вида «стоп», «стой», «отмена», «хватит», «останови всё», `stop`, `/stop` (или с номером: «стоп 263», `/stop #263`) служба обрабатывает сама в `core.mjs` (`send` → `parseStop` из `shared.mjs`), не обращаясь к модели: останавливает помощников (та же функция, что у `helper_stop`) и текущий ответ, сразу отвечает «Остановил: #N.» и оставляет главному системную заметку. Работает в окне и в CLI, в том числе при исчерпанном лимите. Помощник, упёршийся в лимит (429, usage limit), не висит: повторы ограничены (`RETRY` в `guard.mjs`), затем он сдаёт отчёт «лимит исчерпан».
