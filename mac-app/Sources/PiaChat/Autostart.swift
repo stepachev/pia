@@ -18,9 +18,9 @@ enum Autostart {
 
     /// Идемпотентно: регистрирует только то, что ещё не включено. Возвращает строки состояния.
     @discardableResult
-    static func ensureRegistered() -> [String] {
+    static func ensureRegistered(only: String? = nil) -> [String] {
         var out: [String] = []
-        for p in plists {
+        for p in plists where only == nil || p == "com.pi-agent.\(only!).plist" {
             let svc = SMAppService.agent(plistName: p)
             // status == .enabled значит лишь «разрешено», а не «загружено в launchd»: register() вызываем всегда (повторный вызов безвреден)
             if svc.status != .requiresApproval {
@@ -31,9 +31,9 @@ enum Autostart {
         return out
     }
 
-    static func unregisterAll() -> [String] {
+    static func unregisterAll(only: String? = nil) -> [String] {
         var out: [String] = []
-        for p in plists {
+        for p in plists where only == nil || p == "com.pi-agent.\(only!).plist" {
             let svc = SMAppService.agent(plistName: p)
             do { try svc.unregister() } catch { out.append("\(p): \(error.localizedDescription)") }
             out.append("\(p): \(name(svc.status))")

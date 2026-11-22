@@ -2,8 +2,12 @@
 # Сборка pia.app: swift build (SDK 26.5 — в SDK 27 у Command Line Tools нет плагина SwiftUIMacros для @State),
 # бандл, значок, подпись постоянным самоподписанным сертификатом «pia local signing» (права macOS не сбрасываются),
 # рантайм pia (копия Node в Contents/MacOS/pia, подписана вместе с бандлом),
-# установка в ~/Applications/pia.app; службы server и chat — внутри бандла (Contents/Library/LaunchAgents, из ../launchd/*.plist.template), регистрация SMAppService.  Запуск: ./build.sh [--no-install]
+# установка в ~/Applications/pia.app; службы server и chat — внутри бандла (Contents/Library/LaunchAgents, из ../launchd/*.plist.template), регистрация SMAppService.  Запуск: ./build.sh [--no-install] [--full]
+# По умолчанию установка трогает только окно (pia-app, ресурсы, подпись бандла) и службу chat; рантайм Contents/MacOS/pia и служба server
+# остаются как есть (pid сервера не меняется). --full — заменить бандл целиком и перерегистрировать обе службы (сервер перезапустится).
 set -e
+FULL=0; NOINST=0
+for a in "$@"; do case $a in --full) FULL=1;; --no-install) NOINST=1;; esac; done
 cd "${0:A:h}"
 # SDK: берём 26.5, иначе любой 26.x (в CLT с SDK 27 swift build падает на @State); Xcode.app — запасной путь
 SDK=""
@@ -56,7 +60,18 @@ done
 NODE_SRC=${PIA_NODE:-}
 [ -x "$NODE_SRC" ] || NODE_SRC=$HOME/.local/share/pi-node/current/bin/node
 [ -x "$NODE_SRC" ] || NODE_SRC=$(command -v node || true)
-if [ -x "$NODE_SRC" ]; then
+INST=~/Applications/pia.app
+REUSE_RT=0
+if [ "$FULL" != 1 ] && [ "$NOINST" != 1 ] && [ -x "$INST/Contents/MacOS/pia" ] && [ -x "$NODE_SRC" ]; then
+  # рантайм не менялся? сравниваем установленный (без подписи) с исходным Node
+  NS=$(python3 -c 'import os,sys;print(os.path.realpath(sys.argv[1]))' "$NODE_SRC")
+  T=$(mktemp); cp "$INST/Contents/MacOS/pia" $T; codesign --remove-signature $T 2>/dev/null
+  cmp -s $T "$NS" && REUSE_RT=1; rm -f $T
+fi
+if [ "$REUSE_RT" = 1 ]; then
+  cp -p "$INST/Contents/MacOS/pia" $APP/Contents/MacOS/pia   # тот же файл с той же подписью: cdhash рантайма не меняется
+  echo "рантайм не менялся — оставлен как есть"
+elif [ -x "$NODE_SRC" ]; then
   NODE_SRC=$(python3 -c 'import os,sys;print(os.path.realpath(sys.argv[1]))' "$NODE_SRC")
   cp -f "$NODE_SRC" $APP/Contents/MacOS/pia
   chmod 755 $APP/Contents/MacOS/pia
@@ -71,40 +86,58 @@ KC=$PWD/signing/pia-signing.keychain-db
 PW=$(signing_password || true)
 if [ -f "$KC" ] && [ -n "$PW" ] && security unlock-keychain -p "$PW" "$KC" 2>/dev/null; then
   ID=$(security find-identity -p codesigning "$KC" | awk '/pia local signing/{print $2; exit}')
-  [ -x $APP/Contents/MacOS/pia ] && codesign --force --entitlements Resources/pia.entitlements --keychain "$KC" -s "$ID" -i com.pi-agent.chat $APP/Contents/MacOS/pia
+  [ "$REUSE_RT" = 1 ] || { [ -x $APP/Contents/MacOS/pia ] && codesign --force --entitlements Resources/pia.entitlements --keychain "$KC" -s "$ID" -i com.pi-agent.chat $APP/Contents/MacOS/pia; }
   codesign --force --options runtime --entitlements Resources/pia.entitlements --keychain "$KC" -s "$ID" -i com.pi-agent.chat $APP
 else
   echo "нет signing/pia-signing.keychain-db — подписываю ad-hoc"
-  [ -x $APP/Contents/MacOS/pia ] && codesign --force --entitlements Resources/pia.entitlements -s - -i com.pi-agent.chat $APP/Contents/MacOS/pia
+  [ "$REUSE_RT" = 1 ] || { [ -x $APP/Contents/MacOS/pia ] && codesign --force --entitlements Resources/pia.entitlements -s - -i com.pi-agent.chat $APP/Contents/MacOS/pia; }
   codesign --force --options runtime --entitlements Resources/pia.entitlements -s - -i com.pi-agent.chat $APP
 fi
 codesign -dvv $APP 2>&1 | grep -E "Identifier|Authority|Signature" || true
 codesign -d -r- $APP 2>&1 | tail -1
-if [ "$1" != "--no-install" ]; then
-  # Установка: старые службы (~/Library/LaunchAgents/com.pi-agent.*.plist, схема до SMAppService) выгружаются и уходят в бэкап,
-  # окно и службы ставятся из бандла и регистрируются через SMAppService (pia-app --register-only; потом окно делает это само при запуске).
+if [ "$NOINST" != 1 ]; then
   U=$(id -u); OLD=~/Library/LaunchAgents; BK=~/.pi-agent/backups/legacy-agents-$(date +%Y%m%d-%H%M%S)
   for L in chat server memory; do
     if [ -f $OLD/com.pi-agent.$L.plist ]; then mkdir -p $BK; launchctl bootout gui/$U/com.pi-agent.$L 2>/dev/null || true; mv $OLD/com.pi-agent.$L.plist $BK/; fi
   done
   [ -d "$BK" ] && echo "старые plist перенесены в $BK"
-  ~/Applications/pia.app/Contents/MacOS/pia-app --unregister >/dev/null 2>&1 || true
-  pkill -x pia-app 2>/dev/null && sleep 0.5 || true
-  pkill -x PiaChat 2>/dev/null || true
-  mkdir -p ~/Applications
-  rm -rf ~/Applications/pia.app
-  ditto $APP ~/Applications/pia.app
   LSR=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
-  $LSR -u $PWD/$APP 2>/dev/null || true; $LSR -f ~/Applications/pia.app || true
-  ~/Applications/pia.app/Contents/MacOS/pia-app --register-only
-  # служба chat (окно) должна подняться сама: ждём до 15 с; если launchd не запустил (статус 78) — перерегистрация и kickstart
-  up() { for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do pgrep -x pia-app >/dev/null && return 0; sleep 1; done; return 1; }
+  I=~/Applications/pia.app
+  SP=$I/Contents/Library/LaunchAgents/com.pi-agent.server.plist
+  # сервер трогаем только при --full, если бандла нет, рантайм поменялся или изменился plist сервера
+  if [ "$FULL" = 1 ] || [ ! -d "$I" ] || [ "$REUSE_RT" != 1 ] || ! cmp -s $APP/Contents/Library/LaunchAgents/com.pi-agent.server.plist "$SP"; then
+    echo "полная установка: бандл целиком, обе службы (сервер перезапустится)"
+    $I/Contents/MacOS/pia-app --unregister >/dev/null 2>&1 || true
+    pkill -x pia-app 2>/dev/null && sleep 0.5 || true
+    pkill -x PiaChat 2>/dev/null || true
+    mkdir -p ~/Applications
+    rm -rf $I
+    ditto $APP $I
+    $LSR -u $PWD/$APP 2>/dev/null || true; $LSR -f $I || true
+    $I/Contents/MacOS/pia-app --register-only
+  else
+    echo "установка только окна: сервер и рантайм не трогаются"
+    launchctl bootout gui/$U/com.pi-agent.chat 2>/dev/null || true
+    pkill -x pia-app 2>/dev/null && sleep 0.5 || true
+    # копируем только изменившееся; Contents/MacOS/pia не трогаем
+    (cd $APP && find Contents -type f ! -path Contents/MacOS/pia) | while read f; do
+      cmp -s "$APP/$f" "$I/$f" 2>/dev/null || { mkdir -p "$(dirname "$I/$f")"; cp -p "$APP/$f" "$I/$f"; }
+    done
+    $LSR -f $I || true
+    codesign -v --deep --strict $I 2>&1 && echo "подпись бандла валидна" || echo "⚠ подпись бандла не проходит проверку"
+    $I/Contents/MacOS/pia-app --register-only chat
+  fi
+  # окно (служба chat): ждём до 15 с; kickstart; при статусе 78/-9/LWCR — bootout + register chat + kickstart
+  up() { for i in $(seq 15); do pgrep -x pia-app >/dev/null && return 0; sleep 1; done; return 1; }
+  up || launchctl kickstart -k gui/$U/com.pi-agent.chat 2>/dev/null || true
   if ! up; then
-    echo "окно не поднялось службой — перерегистрация"
-    ~/Applications/pia.app/Contents/MacOS/pia-app --unregister >/dev/null 2>&1 || true; sleep 2
-    ~/Applications/pia.app/Contents/MacOS/pia-app --register-only
-    up || launchctl kickstart -k gui/$U/com.pi-agent.chat 2>/dev/null || true
+    echo "окно не поднялось — bootout + регистрация chat + kickstart"
+    launchctl bootout gui/$U/com.pi-agent.chat 2>/dev/null || true
+    $I/Contents/MacOS/pia-app --unregister chat >/dev/null 2>&1 || true; sleep 1
+    $I/Contents/MacOS/pia-app --register-only chat
+    launchctl kickstart -k gui/$U/com.pi-agent.chat 2>/dev/null || true
     up && echo "окно запущено службой" || echo "⚠ окно не поднялось: launchctl print gui/$U/com.pi-agent.chat"
   fi
-  echo "установлено: ~/Applications/pia.app (службы server и chat — в бандле, через SMAppService; окно — двойной правый Option/Shift, pia://show, open -a pia)"
+  echo "pia-app: $(pgrep -x pia-app | wc -l | tr -d ' ') процесс(ов)"
+  echo "установлено: ~/Applications/pia.app (по умолчанию обновляется только окно; --full — и сервер)"
 fi
