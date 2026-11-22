@@ -496,7 +496,7 @@ final class PiaContainerView: NSView {
 }
 
 final class PiaBackgroundView: NSView {
-    static let radius: CGFloat = 16
+    static let radius: CGFloat = 24
     static func fill(dark: Bool) -> NSColor { dark ? NSColor(srgbRed: 0.106, green: 0.106, blue: 0.11, alpha: 1) : .white }
     override init(frame: NSRect) {
         super.init(frame: frame)

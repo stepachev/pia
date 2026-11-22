@@ -23,12 +23,10 @@ struct ChatView: View {
             VStack(spacing: 0) {
                 // полоса перетаскивания сверху карточки (заголовка не видно); лента под неё не заезжает,
                 // поэтому выделению текста в сообщениях полоса не мешает
-                DragArea().frame(height: ChatView.dragStrip)
+                // прозрачная область-хват: лента идёт под ней на всю высоту, отдельной плашки и разделителя нет
                 feed
                     .overlay(alignment: .top) {
-                        LinearGradient(colors: [Theme.windowBg, Theme.windowBg.opacity(0)], startPoint: .top, endPoint: .bottom)
-                            .frame(height: 10)
-                            .allowsHitTesting(false)
+                        DragArea().frame(height: ChatView.dragStrip)
                     }
                     // как у Raycast: лента плавно исчезает под полем ввода
                     .overlay(alignment: .bottom) {
@@ -88,7 +86,8 @@ struct ChatView: View {
                     Color.clear.frame(height: 1).id("bottom")
                 }
                 .padding(.horizontal, 22)
-                .padding(.top, 6)
+                // верхний отступ = высота хвата: первая строка не прячется под ним
+                .padding(.top, ChatView.dragStrip)
                 .padding(.bottom, 8 + ChatView.feedBottomInset)   // запас под градиент над полем: последняя строка целиком выше него
                 .background(DragArea())
             }
@@ -188,9 +187,9 @@ struct ChatView: View {
             // капсула как у Raycast: ~36 px в одну строку, растёт вверх при многострочном вводе (радиус фиксированный 18)
             .padding(.horizontal, 14)
             .padding(.vertical, (36 - InputView.lineHeight - InputView.inset.height * 2) / 2)
-            .background(RoundedRectangle(cornerRadius: 18, style: .continuous).fill(Theme.inputFill)
+            .background(RoundedRectangle(cornerRadius: 20, style: .continuous).fill(Theme.inputFill)
                 .shadow(color: .black.opacity(0.05), radius: 3, y: 1))
-            .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(Theme.inputStroke, lineWidth: 1))
+            .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).strokeBorder(Theme.inputStroke, lineWidth: 1))
             .contentShape(Rectangle())
             .onTapGesture { if let tv = model.inputView { tv.window?.makeFirstResponder(tv) } }
             .padding(.horizontal, 9)
