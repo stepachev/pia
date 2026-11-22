@@ -16,6 +16,9 @@ const tty = !!process.stdout.isTTY;
 const errSay = (s) => process.stderr.write((process.stderr.isTTY ? dim(s) : s) + "\n");
 
 // ── Команды без окна ──
+// pia login [провайдер] — подключить провайдера моделей; pia --models — какие модели у ролей и есть ли доступ
+if (args[0] === "login" || args[0] === "--login") { await import("./login.mjs"); await new Promise(() => {}); }
+if (args[0] === "--models") { process.argv.splice(2, 1, "--status"); await import("./login.mjs"); await new Promise(() => {}); }
 if (args[0] === "/usage") { const { printUsage } = await import("./usage.mjs"); printUsage(); process.exit(0); }
 if (["--status", "--start", "--stop", "--restart"].includes(args[0])) {
   const cmd = args[0];

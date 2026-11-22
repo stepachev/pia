@@ -1,11 +1,10 @@
-// Общие части: доступ к Claude, папки, инструменты
+// Общие части: доступ к моделям (провайдер и модели ролей — providers.mjs), папки, инструменты
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
-import { createModels } from "@earendil-works/pi-ai/models";
-import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic";
+import { loadRoles, buildModels, ref } from "./providers.mjs";
 import { obj, str, num, opt } from "@earendil-works/pi-schema";
 import { defineTool, defineExtension, section } from "@earendil-works/pi-durable";
 import { createReadTool, createWriteTool, createBashTool } from "@earendil-works/pi-durable/tools";
@@ -17,32 +16,22 @@ export const HOME = os.homedir();
 export const APP = process.env.PIA_HOME || `${HOME}/.pi-agent`;
 export const WORKDIR = `${APP}/pia`;
 export const MEMORY = `${WORKDIR}/память`;
-export const SONNET = { provider: "anthropic", modelId: "claude-sonnet-5-5" };
-export const OPUS = { provider: "anthropic", modelId: "claude-opus-5-5" };
-export const HAIKU = { provider: "anthropic", modelId: "claude-haiku-5-5" };
+// Модели ролей: из ~/.pi-agent/models.json, без него — прежние Claude (Opus 5.5 / Sonnet 5.5 / Haiku 5.5).
+// ROLES.<роль> = { provider, modelId, thinking }; SONNET/OPUS/HAIKU — прежние имена (smart / opus / fast).
+export const { roles: ROLES, config: MODELS_CONFIG } = loadRoles();
+export const SONNET = ref(ROLES.smart);
+export const OPUS = ref(ROLES.opus);
+export const HAIKU = ref(ROLES.fast);
 export const NODE_BIN = process.execPath;
 
-// ── Доступ к Claude через вход pi ─────────────────────────
-const AUTH = `${HOME}/.pi/agent/auth.json`;
-const load = () => JSON.parse(fs.readFileSync(AUTH, "utf8"));
-let chain = Promise.resolve();
-const credentials = {
-  async read(id) { return load()[id]; },
-  async list() { return Object.entries(load()).map(([providerId, c]) => ({ providerId, type: c.type })); },
-  modify(id, fn) {
-    const r = chain.then(async () => {
-      const all = load(); const next = await fn(all[id]);
-      if (next) all[id] = next; else delete all[id];
-      fs.writeFileSync(AUTH, JSON.stringify(all, null, 2), { mode: 0o600 });
-      return next;
-    });
-    chain = r.catch(() => {}); return r;
-  },
-  async delete(id) { const all = load(); delete all[id]; fs.writeFileSync(AUTH, JSON.stringify(all, null, 2)); },
-};
-export function makeModels() {
-  const models = createModels({ credentials });
-  models.setProvider(anthropicProvider());
+// ── Доступ к моделям через вход pi (~/.pi/agent/auth.json) ──
+// Async: провайдеры подгружаются только нужные. Неполадки (нет модели, неизвестный провайдер) — в errors.log.
+export async function makeModels() {
+  const { models, problems } = await buildModels(ROLES, MODELS_CONFIG);
+  for (const p of problems) {
+    try { fs.appendFileSync(`${APP}/errors.log`, `${new Date().toISOString()} models: ${p}\n`); } catch {}
+    process.stderr.write(`pia: ${p}\n`);
+  }
   return models;
 }
 

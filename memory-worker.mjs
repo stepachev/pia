@@ -7,7 +7,8 @@ import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { createRegistry, Harness } from "@earendil-works/pi-durable";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
-import { APP, MEMORY, HAIKU, makeModels, Files, ensureMemory } from "./shared.mjs";
+import { APP, MEMORY, ROLES, makeModels, Files, ensureMemory } from "./shared.mjs";
+import { ref } from "./providers.mjs";
 
 const STATE = `${APP}/memory-state.json`;
 const LOCK = `${APP}/memory-worker.lock`;
@@ -82,7 +83,7 @@ const save = () => fs.writeFileSync(STATE, JSON.stringify(state, null, 2));
 
 const registry = createRegistry(); registry.install(Files);
 const harness = await Harness.open(await openNodeSqliteStorage(`${APP}/memory-worker.sqlite`), {
-  models: makeModels(), registry, env: () => new NodeExecutionEnv({ cwd: MEMORY }),
+  models: await makeModels(), registry, env: () => new NodeExecutionEnv({ cwd: MEMORY }),
 }, context);
 harness.resume();
 
@@ -90,7 +91,7 @@ async function digest(job) {
   // job: { upTo, requestId, content, convId? } — сохраняется до запуска, чтобы после сбоя продолжить
   let conv = job.convId != null ? await harness.conversation(job.convId, context) : undefined;
   if (!conv) {
-    conv = await harness.createConversation({ ownership: { kind: "ownerless" }, agent: { model: HAIKU, thinkingLevel: "off", cwd: MEMORY, instructions: RULES, maxTurns: 60 } }, context);
+    conv = await harness.createConversation({ ownership: { kind: "ownerless" }, agent: { model: ref(ROLES.memory), thinkingLevel: ROLES.memory.thinking, cwd: MEMORY, instructions: RULES, maxTurns: 60 } }, context);
     job.convId = conv.id; state.pending = job; save();
   }
   const res = await (await conv.submit({ type: "input", content: job.content, requestId: job.requestId }, context)).wait(context);

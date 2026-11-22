@@ -11,7 +11,8 @@ import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { DatabaseSync } from "node:sqlite";
 import { STREAM, RETRY, IDLE_MS, MAX_RESTARTS, activity, currentTool, judge, LIMITS } from "./guard.mjs";
-import { APP, WORKDIR, SONNET, HAIKU, OPUS, makeModels, Files, Web, Browser, Memory, ensureMemory } from "./shared.mjs";
+import { APP, WORKDIR, ROLES, makeModels, Files, Web, Browser, Memory, ensureMemory } from "./shared.mjs";
+import { ref } from "./providers.mjs";
 import { buildMessage } from "./attachments.mjs";
 import { imageTrimHook, flatContent, imageTokensOf, makePathResolver } from "./image-context.mjs";
 import { Feed, publicItem } from "./feed.mjs";
@@ -26,7 +27,7 @@ const CHARACTER = `Ты — единственный личный помощни
 Как работаешь: на болтовню и вопросы из головы отвечай сам. Всё остальное — через helper.
 Делай именно то, что просит пользователь. Если он ждёт результат (например, готовый ролик) — цель только этот результат: не подменяй её уборкой, записями, отчётами или вопросами. Не задавай лишних вопросов, если ответ можно найти в его файлах — поручи помощнику найти.
 Задание помощнику пиши полностью, он не видит разговор: цель и что считается готовым результатом, папки и пути, где лежат инструкции (пусть сначала прочитает их и следует им), что нельзя трогать. Большую задачу разбей на части, независимые — одновременно.
-Проверяй отчёты: не говори пользователю, что сделано, если помощник этого не подтвердил; сомнительное — поручи проверить другому помощнику. ОБЯЗАТЕЛЬНО: получив новую задачу, до первого вызова helper напиши пользователю одно предложение — как ты понял задачу и какой будет готовый результат (например: «Понял: делаю новый выпуск Iron Resolve по этому рефу по инструкции канала, на выходе — готовый ролик»), и в том же ответе сразу запускай помощников, не дожидаясь ответа. У каждого helper заполняй title.
+Проверяй отчёты: не говори пользователю, что сделано, если помощник этого не подтвердил; сомнительное — поручи проверить другому помощнику. ОБЯЗАТЕЛЬНО: получив новую задачу, до первого вызова helper напиши пользователю одно предложение — как ты понял задачу и какой будет готовый результат (например: «Понял: делаю новое видео по этому рефу по инструкции, на выходе — готовый ролик»), и в том же ответе сразу запускай помощников, не дожидаясь ответа. У каждого helper заполняй title.
 Помощники работают В ФОНЕ: helper сразу возвращает номер помощника (#N), а его отчёт придёт позже отдельным сообщением «[Отчёт помощника #N …]». Запустив помощников, коротко скажи пользователю, что они работают, и закончи ход — не жди. Пока они работают, ты свободен: отвечай пользователю на любые вопросы как обычно. Не выдумывай результат до отчёта; «как дела?» — helper_list. Если пользователь уточняет или меняет задачу работающего помощника — передай ему через helper_message; если просит остановиться («стоп», «отмена») — helper_stop. Когда пришёл отчёт — проверь его и сообщи пользователю итог или запусти следующий шаг.
 Перед оплатой, отправкой от имени пользователя, удалением важного — спроси, если он заранее не разрешил (проверь память).`;
 const HELPER = `Ты — исполнитель части задачи для главного помощника. Сделай её сам до конца.
@@ -45,7 +46,7 @@ const ok = (text) => ({ output: [{ type: "text", text }] });
 const Helpers = defineExtension({ name: "helpers", tools: [
   defineTool({
     name: "helper",
-    description: "Запустить помощника в фоне. Сразу возвращает его номер (#N); отчёт придёт позже отдельным сообщением. Несколько вызовов идут одновременно. Опиши задачу полностью: помощник не видит разговор. model: smart (по умолчанию; всегда для работы в браузере и на сайтах), fast (дёшево, только простое без браузера) или opus (самое мощное и дорогое — только если пользователь прямо попросил опус).",
+    description: "Запустить помощника в фоне. Сразу возвращает его номер (#N); отчёт придёт позже отдельным сообщением. Несколько вызовов идут одновременно. Опиши задачу полностью: помощник не видит разговор. model: smart (по умолчанию; всегда для работы в браузере и на сайтах), fast (дёшево, только простое без браузера) или opus (самая мощная и дорогая модель выбранного провайдера — только если пользователь прямо попросил опус или самую мощную модель).",
     parameters: obj({ title: opt(str({ description: "3–8 слов для пользователя: чем занят помощник (например: «разбираю референс»)" })), task: str(), model: opt(union([lit("fast"), lit("smart"), lit("opus")])) }),
     replay: "safe",
     execute: async (args, api, ctx) => {
@@ -99,12 +100,13 @@ const runningHelpers = new Map();   // ключ → запись работаю�
 let pendingReports = [];            // отчёты, которые ещё не отданы главному
 let onReport = () => {};
 let closing = false;
+// Модель помощника по роли (smart по умолчанию; opus — самая мощная модель выбранного провайдера)
+const helperRole = (m) => (m === "opus" ? ROLES.opus : m === "fast" ? ROLES.fast : ROLES.smart);
 async function startHelper(key, args, ctx) {
   let rec = store.items[key];
   if (!rec) {
     const conv = await harness.createConversation({ ownership: { kind: "ownerless" }, agent: {
-      model: args.model === "opus" ? OPUS : args.model === "fast" ? HAIKU : SONNET,
-      thinkingLevel: args.model === "opus" ? "high" : "medium", cwd: WORKDIR,
+      model: ref(helperRole(args.model)), thinkingLevel: helperRole(args.model).thinking, cwd: WORKDIR,
       instructions: HELPER, maxTurns: 80, compaction: COMPACTION,
       extensions: [Files, Web, Browser, Memory, Mcp, ToolSearch, CheapCompaction, CacheFix, ImageTrim],
     } }, ctx);
@@ -149,9 +151,8 @@ async function runHelper(args, api, ctx) {
         if (existing !== undefined) return existing.id;
         const created = await tx.createConversation({ ownership: { kind: "task", taskId: api.taskId } });
         await configure(tx, created.id, {
-          // По умолчанию — Sonnet medium (в т.ч. вся работа в браузере); Haiku только по явному fast
-          model: args.model === "opus" ? OPUS : args.model === "fast" ? HAIKU : SONNET,
-          thinkingLevel: args.model === "opus" ? "high" : "medium",
+          // По умолчанию — smart (в т.ч. вся работа в браузере); fast только по явному fast
+          model: ref(helperRole(args.model)), thinkingLevel: helperRole(args.model).thinking,
           instructions: HELPER, maxTurns: 80, compaction: COMPACTION,
           extensions: [Files, Web, Browser, Memory, Mcp, ToolSearch, CheapCompaction, CacheFix, ImageTrim],
         });
@@ -221,18 +222,18 @@ async function watchdogTick() {
 }
 // Сторож запускается в openCore()
 
-// ── Сжатие разговора (пересказ пишет Haiku 5.5) ─────────────
+// ── Сжатие разговора (пересказ пишет модель роли compact; по умолчанию Haiku 5.5) ─────────────
 // Защита от зацикливания: не больше 2 автосжатий за 10 минут в одном разговоре.
 // При окне в 1 млн токенов пропустить сжатие безопасно; частое сжатие стирает память о задаче.
 const compactTimes = new Map();
 const GUARD_WINDOW = 10 * 60_000, GUARD_MAX = 2;
-const models = makeModels();
+const models = await makeModels();
 // Старые сообщения подписаны только именем картинки — полный путь ищем в ленте и папках со снимками
 const resolvePath = makePathResolver({ feedFile: `${APP}/feed.jsonl`, dirs: [`${APP}/вложения`, `${WORKDIR}/mac-images`] });
 // Текст для пересказа: картинки — пометками «[картинка N] (полный путь)», чтобы путь пережил сжатие
 const flat = (c) => flatContent(c, resolvePath);
 // Оценка токенов картинок по их настоящему размеру (⌈w/28⌉×⌈h/28⌉; pi-ai считает любую картинку за ~1371)
-const imagesCost = (messages, modelId = OPUS.modelId) => {
+const imagesCost = (messages, modelId = ROLES.main.modelId) => {
   let n = 0, tokens = 0;
   for (const m of messages) if (Array.isArray(m?.content)) for (const b of m.content) if (b?.type === "image") { n++; tokens += imageTokensOf(b, modelId); }
   return { n, tokens };
@@ -253,7 +254,8 @@ const CheapCompaction = defineExtension({ name: "cheap-compaction", hooks: [hook
       const who = m.role === "user" ? "Пользователь" : m.role === "assistant" ? "Помощник" : m.role === "toolResult" ? "  (результат)" : m.role;
       const t = flat(m.content); return `${who}: ${m.role === "toolResult" ? t.slice(0, 1500) : t}`;
     }).join("\n");
-    const model = models.getModel(HAIKU.provider, HAIKU.modelId);
+    const model = models.getModel(ROLES.compact.provider, ROLES.compact.modelId);
+    if (!model) return undefined;   // нет такой модели — сожмёт основная модель
     const res = await models.completeSimple(model, {
       systemPrompt: "Ты сжимаешь историю разговора личного помощника с пользователем, чтобы помощник продолжил без потерь сути.",
       messages: [{ role: "user", timestamp: Date.now(), content: `Сделай пересказ этой части разговора (на русском, до 1500 слов). Структура:
@@ -266,7 +268,7 @@ const CheapCompaction = defineExtension({ name: "cheap-compaction", hooks: [hook
     }, { maxTokens: 8000 });
     if (res.stopReason === "error") return undefined; // не вышло — сожмёт основная модель
     const summary = flat(res.content).trim();
-    fs.appendFileSync(`${APP}/compaction.log`, `${new Date().toISOString()} сжато Haiku: вход ${(res.usage?.input ?? 0) + (res.usage?.cacheRead ?? 0) + (res.usage?.cacheWrite ?? 0)} ток., пересказ ${res.usage?.output} ток., $${res.usage?.cost?.total?.toFixed(4)}\n`);
+    fs.appendFileSync(`${APP}/compaction.log`, `${new Date().toISOString()} сжато ${ROLES.compact.modelId}: вход ${(res.usage?.input ?? 0) + (res.usage?.cacheRead ?? 0) + (res.usage?.cacheWrite ?? 0)} ток., пересказ ${res.usage?.output} ток., $${(res.usage?.cost?.total ?? 0).toFixed(4)}\n`);
     return summary ? { summary } : undefined;
   },
 })] });
@@ -279,7 +281,7 @@ const CheapCompaction = defineExtension({ name: "cheap-compaction", hooks: [hook
 // пачкой (кратно IMAGE_STEP) — граница сдвигается раз в IMAGE_STEP новых снимков, а не каждый ход, и кэш
 // подсказок перезаписывается редко. В запросе остаётся от IMAGE_KEEP до IMAGE_KEEP+IMAGE_STEP−1 сообщений с картинками.
 const ImageTrim = defineExtension({ name: "image-trim", hooks: [hook(GenerationTask, imageTrimHook({
-  resolve: resolvePath, cwd: WORKDIR, modelId: OPUS.modelId,
+  resolve: resolvePath, cwd: WORKDIR, modelId: ROLES.main.modelId,
   log: (line) => fs.appendFileSync(`${APP}/compaction.log`, `${new Date().toISOString()} ${line}\n`),
   onError: (e) => logErr("image-trim", e),
 }))] });
@@ -355,9 +357,8 @@ export async function openCore() {
   }, context);
 
   // Оркестратор: только память и помощники. Файлы, команды, интернет, браузер и MCP — только у помощников.
-  // PIA_MAIN_MODEL=haiku — для проверочного экземпляра (дёшево)
-  const mainModel = process.env.PIA_MAIN_MODEL === "haiku" ? HAIKU : OPUS;
-  const agent = { compaction: COMPACTION, model: mainModel, thinkingLevel: mainModel === HAIKU ? "off" : "medium", cwd: WORKDIR, instructions: CHARACTER,
+  // Модель — роль main из models.json (по умолчанию Opus 5.5, medium); PIA_MAIN_MODEL=haiku|fast — дёшево, для проверочного экземпляра
+  const agent = { compaction: COMPACTION, model: ref(ROLES.main), thinkingLevel: ROLES.main.thinking, cwd: WORKDIR, instructions: CHARACTER,
     extensions: [Memory, Helpers, CheapCompaction, CacheFix, ImageTrim, DebugPayload] };
   const mapFile = `${APP}/chats.json`;
   const map = fs.existsSync(mapFile) ? JSON.parse(fs.readFileSync(mapFile, "utf8")) : {};

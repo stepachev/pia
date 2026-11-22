@@ -1,10 +1,10 @@
 # pia
 
-ИИ-помощник на Mac: фоновая служба (Node.js + Pi Durable, модели Claude), команда `pia` в терминале и окно `pia.app` (автозапуск, двойной правый Shift).
+ИИ-помощник на Mac: фоновая служба (Node.js + Pi Durable, модели — любого провайдера, который поддерживает pi, по умолчанию Claude), команда `pia` в терминале и окно `pia.app` (автозапуск, двойной правый Shift).
 
 ## Что нужно
 - Mac с macOS 13+ (окно собирается с SDK MacOSX 26.x — Command Line Tools или Xcode).
-- Свой аккаунт Claude (вход через `pia-login`, см. ниже).
+- Доступ к модели: подписка или API-ключ любого провайдера pi либо локальная модель (вход — `pia login`, см. «Провайдеры и модели»; по умолчанию Claude).
 - Разрешения macOS окно попросит само, по одному и с пояснениями (см. «Разрешения macOS»); без них pia работает как обычный чат.
 - Для окна: Command Line Tools (`xcode-select --install`) с SDK macOS 26.x (`/Library/Developer/CommandLineTools/SDKs/MacOSX26*.sdk`) или Xcode; без него сборка окна остановится с сообщением.
 - Подключения MCP необязательны: по умолчанию не ставится ни один сервер (см. «Подключить свои сервисы (MCP)»).
@@ -15,8 +15,44 @@ git clone https://github.com/stepachev/pia ~/.pi-agent && ~/.pi-agent/install.sh
 ```
 Установщик идемпотентный: ставит Command Line Tools (если нет — попросит дождаться и запустить снова), Node 22 LTS, зависимости, команды `pia` и `pia-login`, службы LaunchAgents из `launchd/*.plist.template` (вместо `__HOME__` подставляется твоя домашняя папка), создаёт пустой `mcp.json` (без MCP-серверов), делает сертификат подписи, собирает и ставит окно. Если уже установлено — только сообщит. `./install.sh --check` — показать, что будет сделано, ничего не меняя; `./install.sh --update` — обновить код и окно.
 
+## Провайдеры и модели
+pia не привязана к Claude: подключается любой провайдер из библиотеки pi (`@earendil-works/pi-ai`): Anthropic (подписка Claude или API-ключ), OpenAI и ChatGPT Plus/Pro (Codex), Google Gemini, OpenRouter, GitHub Copilot, xAI (Grok), Groq, DeepSeek, Mistral, Cerebras, Fireworks, Hugging Face, Amazon Bedrock, Azure, Vertex и другие (полный список — `pia login` → «Другой провайдер»), а также локальные модели (Ollama, LM Studio, vLLM — любой OpenAI-совместимый адрес).
+
+**Как подключить**
+1. `pia login` — меню провайдеров (или сразу `pia login openai`, `pia login local`). Для подписки откроется браузер, для остальных спросит API-ключ (ввод скрыт).
+2. Вход сохраняется в `~/.pi/agent/auth.json` (тот же файл, что у pi; права 600, вне git).
+3. pia предложит переключиться на этого провайдера — ответ «да» запишет `~/.pi-agent/models.json`.
+4. `pia --restart` — применить (обрывает работающих помощников). Проверить: `pia --models` (какие модели у ролей и есть ли доступ; запросов к моделям не делает).
+
+**Роли:** `main` — главный (оркестратор); `smart` — помощник по умолчанию (`helper` с `model: smart`); `fast` — дешёвый помощник; `opus` — самая мощная модель провайдера (`model: opus`); `memory` — фоновый разбор памяти; `compact` — пересказ при сжатии разговора. Чего нет в файле — берётся из готового набора провайдера или у соседней роли (`smart`/`opus` ← `main`, `fast` ← `smart`, `memory`/`compact` ← `fast`).
+
+**Конфиг** `~/.pi-agent/models.json` (вне git; другой путь — переменная `PIA_MODELS`). Нет файла — всё как раньше: Claude (Opus 5.5 главный и opus, Sonnet 5.5 smart, Haiku 5.5 fast/память). Роль — `"модель"`, `"провайдер/модель"` или `{ "provider", "model", "thinking" }` (`thinking`: off, minimal, low, medium, high, xhigh — подгоняется под возможности модели). Id моделей — из каталога pi-ai.
+
+Примеры:
+```json
+{ "provider": "openai-codex" }
+```
+ChatGPT Plus/Pro (`pia login openai-codex`): готовый набор моделей, ничего больше писать не нужно. Так же с `"anthropic"`, `"openai"`, `"google"`, `"xai"`, `"groq"`, `"deepseek"`, `"mistral"`, `"github-copilot"`, `"openrouter"` — у них есть готовые наборы.
+```json
+{ "provider": "google", "roles": { "main": "gemini-pro-latest", "fast": "gemini-flash-lite-latest" } }
+```
+Gemini (`pia login google`, ключ с aistudio.google.com): свои модели для некоторых ролей, остальное — из набора.
+```json
+{ "provider": "openrouter", "roles": { "main": "anthropic/claude-opus-5.5", "smart": "deepseek/deepseek-v4-pro", "fast": "openai/gpt-oss-20b" } }
+```
+OpenRouter (`pia login openrouter`): модели разных авторов через один ключ. У id модели может быть «/» — провайдером считается только известное имя в начале.
+```json
+{ "provider": "ollama",
+  "providers": { "ollama": { "name": "Ollama", "baseUrl": "http://localhost:11434/v1", "api": "openai-completions",
+                 "models": [ { "id": "qwen3:14b", "input": ["text"], "reasoning": false, "contextWindow": 32768 } ] } },
+  "roles": { "main": "qwen3:14b" } }
+```
+Локальная модель (проще: `pia login local` — спросит адрес, найдёт модели и запишет всё сам). Ключ не нужен для адресов `localhost`; для удалённого — `apiKey` в записи (строка, `"$ИМЯ_ПЕРЕМЕННОЙ"` или `"!команда"`, например `!security find-generic-password -ws имя`). Свои провайдеры `providers` — формат как у `models.json` в pi. Совет: маленьким локальным моделям тяжело работать с инструментами и браузером — их лучше брать для `fast`/`memory`.
+
+Заметки: учёт трат `/usage` считает по стоимости из каталога pi (у локальных — 0); картинки оцениваются по правилам Claude, для других моделей — осторожнее (с запасом). Специальная подстройка кэша подсказок включается только для Claude (`anthropic-messages`). Если модель или провайдер указаны неверно, pia пишет причину в `errors.log` и работает на Claude.
+
 ## Вход к провайдеру
-Одна команда: `pia-login` (по умолчанию Anthropic, откроется браузер; вход пишется в `~/.pi/agent/auth.json`, права 600). Потом `pia`. Другой провайдер: `pia-login openai` (список: `node node_modules/@earendil-works/pi-ai/dist/cli.js list`); модели и тип провайдера меняются в `shared.mjs` (строки `SONNET`/`OPUS`/`HAIKU`, `import … Provider` и `models.setProvider(…)`), затем `pia --restart`.
+`pia login` (меню) или `pia login <провайдер>` — см. «Провайдеры и модели». Старая команда `pia-login` (её ставит install.sh) — простой вход через pi-ai (`pia-login openai`), без выбора ролей и записи `models.json`; для полной настройки используй `pia login`. Потом `pia`.
 
 ## Окно
 Окно: двойной правый Shift (с контекстом), двойной правый Option (показать/спрятать; встроенный, отключается `open pia://option-off`; не включать вместе с таким же хоткеем Raycast), Raycast «pia», Spotlight → pia или `open pia://show`; живёт в фоне (`~/Applications/pia.app`). Сертификат подписи («pia local signing») лежит в отдельной связке `mac-app/signing/`, её секрет — в Связке ключей macOS (служба `pia-signing`); подпись постоянная, поэтому разрешения не слетают при пересборке. Сборка вручную: `mac-app/build.sh` (`--no-install` — без установки). Голый `swift build` без build.sh падает на `@State` («SwiftUIMacros.StateMacro could not be found»): в Command Line Tools по умолчанию SDK 27, там `@State` — макрос, а плагина макросов SwiftUI в CLT нет; build.sh собирает с SDK 26.x из тех же CLT (`SDKROOT=…/MacOSX26.5.sdk`), Xcode не нужен.
