@@ -33,12 +33,16 @@ runtime() {
   if [ -x "$HOME/Applications/pia.app/Contents/MacOS/pia" ]; then echo "$HOME/Applications/pia.app/Contents/MacOS/pia"; else echo "$HOME/.local/share/pi-node/current/bin/node"; fi
 }
 write_wrapper() {  # $1 — файл, $2 — аргументы после agent.mjs
+  # Предохранитель (только для pia): единственный аргумент — существующий .mjs/.js/.cjs — запускаем рантаймом как node, в чат не шлём
+  GUARD=""
+  if [ -z "$2" ]; then GUARD='case "$#:$1" in 1:*.mjs|1:*.js|1:*.cjs) if [ -f "$1" ]; then echo "pia: запуск скрипта рантаймом pia" >&2; exec "$R" "$@"; fi;; esac'; fi
   cat > "$1" <<WRAP
 #!/bin/sh
 export NODE_NO_WARNINGS=1
 export PATH="\$HOME/.pi-agent/runtime-bin:\$PATH"
 R="\$HOME/Applications/pia.app/Contents/MacOS/pia"
 [ -x "\$R" ] || R="\$HOME/.local/share/pi-node/current/bin/node"
+$GUARD
 exec "\$R" "\$HOME/.pi-agent/agent.mjs" $2"\$@"
 WRAP
   chmod +x "$1"
@@ -153,7 +157,7 @@ fi
 # ── 4. команда pia ──
 step "4. Команда pia"
 # обёртки запускают рантайм из pia.app (имя процесса «pia»); обновляются и у тех, у кого стояли старые (с node)
-if [ -x "$BIN/pia" ] && grep -q 'runtime-bin' "$BIN/pia" && [ -x "$BIN/pia-login" ] && grep -q 'runtime-bin' "$BIN/pia-login"; then ok "$BIN/pia и pia-login на месте"; else
+if [ -x "$BIN/pia" ] && grep -q 'runtime-bin' "$BIN/pia" && grep -q 'запуск скрипта' "$BIN/pia" && [ -x "$BIN/pia-login" ] && grep -q 'runtime-bin' "$BIN/pia-login"; then ok "$BIN/pia и pia-login на месте"; else
   if [ "$DRY" = 1 ]; then todo "создал бы $BIN/pia и $BIN/pia-login"; else
     # pia-login = то же меню выбора провайдера, что и `pia login` (agent.mjs → login.mjs); тот же ~/.pi/agent/auth.json
     write_wrapper "$BIN/pia" ""; write_wrapper "$BIN/pia-login" "login "

@@ -38,6 +38,18 @@ if (["--status", "--start", "--stop", "--restart"].includes(args[0])) {
 }
 
 const INTERACTIVE = !args.length && process.stdin.isTTY && tty;
+// Предохранитель: сообщения в чат от имени пользователя — только вручную (stdin и stdout — терминал, не команда помощника).
+const FROM_HELPER = !!process.env.PIA_HELPER || !!process.env.PIA_CONV;
+const HUMAN = !!process.stdin.isTTY && tty && !FROM_HELPER;
+{
+  const f = args.length === 1 ? args[0] : null;
+  if (f && /\.(mjs|js|cjs)$/.test(f) && fs.existsSync(f) && fs.statSync(f).isFile()) {   // старая привычка `pia file.mjs`: запускаем как node, в чат не шлём
+    process.stderr.write("pia: запуск скрипта рантаймом pia\n");
+    const { spawnSync } = await import("node:child_process");
+    process.exit(spawnSync(process.execPath, [f], { stdio: "inherit" }).status ?? 1);
+  }
+  if (!HUMAN) { process.stderr.write("pia: сообщение не отправлено — отправлять может только человек в окне или терминале\n"); process.exit(2); }
+}
 if (tty && process.stdin.isTTY) await detectTheme({ keepRaw: INTERACTIVE });
 
 // Пока ждём службу, Ctrl+C / Ctrl+D в окне — выйти (в «сыром» режиме сигнала нет)
@@ -70,7 +82,7 @@ async function askOnce(text) {
   await hello;
   const onSig = () => { request(conn, "POST", "/api/stop", {}).catch(() => {}); };
   process.on("SIGINT", onSig);
-  try { sent = (await request(conn, "POST", "/api/send", { text, source: "cli" }, 60_000)).seq; }
+  try { sent = (await request(conn, "POST", "/api/send", { text, source: "cli", tty: true }, 60_000)).seq; }
   catch (e) { console.log("Ошибка: " + e.message); st.close(); return; }
   flush();
   const s = await request(conn, "GET", "/api/state").catch(() => null);

@@ -9,6 +9,8 @@ import http from "node:http";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { APP } from "./shared.mjs";
+import { isHelperPeer } from "./proctree.mjs";
 
 const MAX_BODY = 2 * 1024 * 1024;
 export const newToken = () => crypto.randomBytes(24).toString("base64url");
@@ -55,6 +57,15 @@ export function checkSend(body) {
   return { text, images, tokens, pastes, source: typeof body.source === "string" ? body.source.slice(0, 20) : "raycast" };
 }
 
+// Решение: можно ли принять сообщение. В чат как сообщение пользователя идёт только то, что набрал человек
+// (окно pia-app, Raycast, интерактивная pia). Возвращает причину отказа или null.
+export function sendVerdict(body, { fromHelper = false } = {}) {
+  if (body && body.helper) return "из команды помощника";
+  if (fromHelper) return "процесс-потомок помощника";
+  if (body && body.source === "cli" && body.tty !== true) return "cli без терминала";
+  return null;
+}
+const blockedLog = (text, why) => { try { fs.appendFileSync(`${APP}/daemon.log`, `${new Date().toISOString()} [${process.pid}] заблокировано сообщение не от пользователя: ${String(text ?? "").replace(/\s+/g, " ").slice(0, 60)} (${why})\n`); } catch {} };
 export function createServer(core, { token }) {
   const streams = new Set();
   const server = http.createServer(async (req, res) => {
@@ -68,7 +79,10 @@ export function createServer(core, { token }) {
         return reply(res, 200, core.history(Number(url.searchParams.get("after") ?? 0) || 0, Number(url.searchParams.get("limit") ?? 200) || 200));
       }
       if (route === "POST /api/send") {
-        const msg = checkSend(await readBody(req));
+        const raw = await readBody(req);
+        const why = sendVerdict(raw, { fromHelper: await isHelperPeer(req.socket.remotePort, req.socket.localPort).catch(() => false) });
+        if (why) { blockedLog(raw?.text, why); return reply(res, 403, { ok: false, error: "сообщение не отправлено — отправлять может только человек в окне или терминале" }); }
+        const msg = checkSend(raw);
         const item = await core.send(msg);
         return reply(res, 200, { ok: true, seq: item.seq });
       }

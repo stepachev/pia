@@ -17,6 +17,7 @@ import { isLimitError, limitResetAt, mainLimitLine, helperLimitLine, pauseLabel 
 import { buildMessage } from "./attachments.mjs";
 import { imageTrimHook, flatContent, imageTokensOf, makePathResolver } from "./image-context.mjs";
 import { Feed, publicItem } from "./feed.mjs";
+import { killConvTree, TrackedEnv } from "./proctree.mjs";
 
 let harness, Mcp, ToolSearch;   // открываются в openCore()
 
@@ -36,7 +37,7 @@ const HELPER = `Ты — исполнитель части задачи для �
 Если во время работы придёт сообщение пользователя — оно главнее задания: учти его сразу.
 Отчёт — сжато, до 5 строк: только ответ на задачу (факты, цифры), 1–2 источника короткими ссылками, что не вышло. Без вступлений и пересказа процесса.
 Сверяй источники, после действий на сайте проверяй результат. Не плати, не отправляй и не удаляй ничего. По-русски.
-Зависания: у каждой команды есть таймаут (bash по умолчанию 120 с, браузер ${LIMITS.browser.def} с). Скрипты Node/Playwright/CDP обязательно завершай (browser.close() или process.exit() и в catch тоже) и запускай с \`timeout N\`. Долгое (ffmpeg, заливка, опрос) — запускай с явным timeout побольше или в фоне (nohup … > лог &) и проверяй короткими командами; опрос — с лимитом времени. Если пришла ошибка про таймаут или сообщение сторожа — не повторяй то же самое, выбери другой путь.`;
+Node-скрипты запускай командой \`node\` (она есть в PATH службы) или process.execPath, а не \`pia\`: \`pia\` — это чат.\nЗависания: у каждой команды есть таймаут (bash по умолчанию 120 с, браузер ${LIMITS.browser.def} с). Скрипты Node/Playwright/CDP обязательно завершай (browser.close() или process.exit() и в catch тоже) и запускай с \`timeout N\`. Долгое (ffmpeg, заливка, опрос) — запускай с явным timeout побольше или в фоне (nohup … > лог &) и проверяй короткими командами; опрос — с лимитом времени. Если пришла ошибка про таймаут или сообщение сторожа — не повторяй то же самое, выбери другой путь.`;
 
 // ── Помощники (субагенты) в фоне ──────────────────────────
 // helper сразу возвращает номер помощника: главный не ждёт и отвечает пользователю,
@@ -93,9 +94,11 @@ const Helpers = defineExtension({ name: "helpers", tools: [
   }),
 ] });
 // Остановить помощника n (или всех) — и инструмент helper_stop, и команда «стоп» без модели
+// Убить все процессы помощника (SIGTERM, через 3 с SIGKILL); не ждём — «стоп» отвечает сразу
+const killHelperTree = (r) => killConvTree(r.conv).catch((e) => logErr("kill-tree", e));
 async function stopHelpers(n) {
   const list = [...runningHelpers.values()].filter((x) => n == null || x.n === n);
-  for (const r of list) { r.stopped = true; r.wake?.(); (await harness.conversation(r.conv, context))?.abort(context).catch(() => {}); }
+  for (const r of list) { r.stopped = true; r.wake?.(); (await harness.conversation(r.conv, context))?.abort(context).catch(() => {}); killHelperTree(r); }
   return list;
 }
 const RESUME_GAP_MS = 90_000, RETRY_MS = 15 * 60_000;   // после сброса лимита ждём ещё 1,5 мин; без времени — повтор раз в 15 мин
@@ -184,6 +187,7 @@ function watchHelper(key, rec) {
         if (isLimitError(detail)) {   // лимит: не отчитываемся, а ставим на паузу
           const at = limitResetAt(detail);
           pauseAt(rec, at);
+          killHelperTree(rec);
           helperNote(helperLimitLine(rec.n, at));
           continue;
         }
@@ -205,6 +209,7 @@ function watchHelper(key, rec) {
       logErr("helper-bg", e); text = `Ошибка: ${e?.message ?? e}`;
     }
     runningHelpers.delete(key);
+    await killHelperTree(rec);   // завершился, ошибка или остановка: осиротевших процессов не оставляем
     pendingReports.push({ key, n: rec.n, title: rec.title, text: `[Отчёт помощника #${rec.n} «${rec.title}»]\n${text.slice(0, 4000)}` });
     onReport();
   })();
@@ -419,7 +424,8 @@ export async function openCore() {
   ToolSearch = createToolSearchExtension();
   const registry = createRegistry();
   for (const ext of [Files, Web, Browser, Memory, Mcp, ToolSearch, Helpers, CheapCompaction, CacheFix, ImageTrim, DebugPayload]) registry.install(ext);
-  const env = ({ cwd }) => new NodeExecutionEnv({ cwd: cwd ?? WORKDIR });
+  // Команды помощников идут через TrackedEnv: учёт процессов и метки PIA_CONV/PIA_HELPER в окружении (см. proctree.mjs)
+  const env = ({ cwd, conversationId }) => new TrackedEnv({ cwd: cwd ?? WORKDIR }, conversationId);
   harness = await Harness.open(await openNodeSqliteStorage(`${APP}/memory.sqlite`), {
     models, registry, env, settings: { toolExecution: "parallel", stream: STREAM, retry: RETRY },
   }, context);
