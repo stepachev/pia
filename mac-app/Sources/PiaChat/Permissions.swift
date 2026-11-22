@@ -123,12 +123,14 @@ final class Permissions {
                 UserDefaults.standard.set(true, forKey: key)
                 Log.write("разрешения: системный запрос «Универсальный доступ»")
                 _ = AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary)
+                DragPanel.shared.show(.accessibility, explicit: false)   // если откроют настройки из системного окна
             }
         case .screen:
             if prompted { openSettings(kind) } else {
                 UserDefaults.standard.set(true, forKey: key)
                 Log.write("разрешения: системный запрос «Запись экрана»")
                 // macOS показывает этот запрос один раз за всё время; без ответа «да» — сразу false
+                DragPanel.shared.show(.screen, explicit: false)
                 if !CGRequestScreenCaptureAccess() {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
                         guard let self, !self.screen, NSApp.isActive else { return }
@@ -159,6 +161,7 @@ final class Permissions {
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(kind.pane)") {
             NSWorkspace.shared.open(url)
         }
+        DragPanel.shared.show(kind, explicit: true)   // подсказка с перетаскиваемым значком pia (только для разрешений-списков)
     }
 
     // MARK: перезапуск окна (не службы)
