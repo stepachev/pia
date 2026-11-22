@@ -4,7 +4,7 @@ import SwiftUI
 /// поворачивается на 90° каждые 180 мс (цикл 720 мс, speed 1), переход со smoothstep.
 /// Прозрачность точки: 0.09 + вес·(0.88 − 0.09), как в оригинале. Оригинал: size 24, dotSize 6.
 struct Dots3x3Loader: View {
-    var size: CGFloat = 17
+    var size: CGFloat = 12
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private static let glyph: [Double] = [1, 0, 1, 0, 0, 0, 0, 1, 0]
