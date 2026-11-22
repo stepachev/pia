@@ -13,6 +13,7 @@ import { DatabaseSync } from "node:sqlite";
 import { STREAM, RETRY, IDLE_MS, MAX_RESTARTS, activity, currentTool, judge, LIMITS } from "./guard.mjs";
 import { parseStop, APP, WORKDIR, ROLES, makeModels, Files, Web, Browser, Memory, ensureMemory } from "./shared.mjs";
 import { ref } from "./providers.mjs";
+import { isLimitError, limitResetAt, mainLimitLine, helperLimitLine, pauseLabel } from "./limit.mjs";
 import { buildMessage } from "./attachments.mjs";
 import { imageTrimHook, flatContent, imageTokensOf, makePathResolver } from "./image-context.mjs";
 import { Feed, publicItem } from "./feed.mjs";
@@ -54,6 +55,7 @@ const Helpers = defineExtension({ name: "helpers", tools: [
         // Вызов, начатый старой версией (помощник принадлежит вызову) — доводим по-старому
         const legacy = await api.commit(async (tx) => (await tx.scanConversations({ ownerTaskId: api.taskId }, 1)).items[0], ctx);
         if (legacy !== undefined) return await runHelper(args, api, ctx);
+        if (Date.now() < mainLimitUntil) return ok(`Лимит модели сейчас исчерпан — помощника не запускаю. ${mainLimitLine(mainLimitUntil)}`);
         const rec = await startHelper(String(api.taskId), args, ctx);
         return ok(`Помощник #${rec.n} «${rec.title}» запущен в фоне. Отчёт придёт отдельным сообщением.`);
       } catch (e) { logErr("helper", e); throw e; }
@@ -64,7 +66,7 @@ const Helpers = defineExtension({ name: "helpers", tools: [
     description: "Какие помощники сейчас работают и сколько времени.",
     parameters: obj({}),
     execute: async () => ok(runningHelpers.size
-      ? [...runningHelpers.values()].map((r) => `#${r.n} «${r.title}» — ${Math.round((Date.now() - r.started) / 60000)} мин`).join("\n")
+      ? [...runningHelpers.values()].map((r) => r.wakeAt ? `#${r.n} «${r.title}» — ${pauseLabel(r.pauseUntil)}` : `#${r.n} «${r.title}» — ${Math.round((Date.now() - r.started) / 60000)} мин`).join("\n")
       : "Сейчас никто не работает."),
   }),
   defineTool({
@@ -93,13 +95,48 @@ const Helpers = defineExtension({ name: "helpers", tools: [
 // Остановить помощника n (или всех) — и инструмент helper_stop, и команда «стоп» без модели
 async function stopHelpers(n) {
   const list = [...runningHelpers.values()].filter((x) => n == null || x.n === n);
-  for (const r of list) { r.stopped = true; (await harness.conversation(r.conv, context))?.abort(context).catch(() => {}); }
+  for (const r of list) { r.stopped = true; r.wake?.(); (await harness.conversation(r.conv, context))?.abort(context).catch(() => {}); }
   return list;
 }
-const isLimitError = (s) => /429|rate.?limit|usage.?limit|limit (?:reached|exceeded)|quota|overloaded|model_error|insufficient|лимит/i.test(typeof s === "string" ? s : JSON.stringify(s ?? ""));
+const RESUME_GAP_MS = 90_000, RETRY_MS = 15 * 60_000;   // после сброса лимита ждём ещё 1,5 мин; без времени — повтор раз в 15 мин
+let mainLimitUntil = 0;             // главная модель на лимите до этого времени — новых помощников не запускаем
+let helperNote = () => {};          // служебная строка в ленту (задаётся в openCore)
+// Текст ошибки модели для распознавания лимита: итог записи и ошибка из истории разговора (errorMessage провайдера)
+async function errorText(conv, settled) {
+  let extra = "";
+  try {
+    const page = await conv?.entries({}, 3, undefined, context);
+    const hit = (page?.items ?? []).map((e) => safe(e)).find((x) => x.includes("errorMessage"));
+    extra = hit ?? "";
+  } catch (e) { logErr("error-text", e); }
+  return `${safe({ reason: settled?.reason, error: settled?.error })} ${extra}`;
+}
+const safe = (v) => { try { return JSON.stringify(v) ?? ""; } catch { return ""; } };
+// Ждём до времени at (или пока помощника не остановят)
+function sleepUntil(rec, at) {
+  return new Promise((resolve) => {
+    const done = () => { clearTimeout(t); rec.wake = null; resolve(); };
+    const t = setTimeout(done, Math.max(0, at - Date.now()));
+    rec.wake = done;
+  });
+}
+// Пауза помощника после лимита: сброс (если известен) + 1,5 мин; иначе повтор через 15 мин. Сохраняем в helpers.json.
+function pauseAt(rec, at) {
+  rec.wakeAt = at ? at + RESUME_GAP_MS : Date.now() + RETRY_MS;
+  rec.pauseUntil = at ?? rec.wakeAt;
+  saveStore();
+}
+// Продолжить разговор помощника с того же места (Pi Durable: continue). Если не вышло — повтор задания с пометкой.
+async function resumeRun(conv, rec, key) {
+  try {
+    const first = await (await conv.submit({ type: "continue" }, context)).wait(context);
+    if (first.status === "done" || first.reason !== "nothing_to_answer") return first;
+  } catch (e) { logErr("helper-resume", e); }
+  return (await (await conv.submit({ type: "input", content: `Продолжи с места остановки: лимит модели кончился, задание не завершено. Исходное задание:\n${rec.task}\n\nТо, что уже сделано, — в истории этого разговора выше; продолжай с него, не начиная заново.`, requestId: `helper:${key}:resume${Date.now()}` }, context)).wait(context));
+}
 const HELPERS_FILE = `${APP}/helpers.json`;
 const store = (() => { try { return JSON.parse(fs.readFileSync(HELPERS_FILE, "utf8")); } catch { return { next: 1, items: {} }; } })();
-const RUNTIME_KEYS = new Set(["progress", "wakeNote", "restarts", "giveUp"]);   // служебное сторожа — в файл не пишем
+const RUNTIME_KEYS = new Set(["progress", "wakeNote", "restarts", "giveUp", "wake"]);   // служебное сторожа — в файл не пишем
 const saveStore = () => fs.writeFileSync(HELPERS_FILE, JSON.stringify(store, (k, v) => (RUNTIME_KEYS.has(k) ? undefined : v), 2));
 const runningHelpers = new Map();   // ключ → запись работающего помощника
 let pendingNotes = [];              // системные заметки для главного (напр. «пользователь всё остановил»)
@@ -126,21 +163,43 @@ function watchHelper(key, rec) {
   if (runningHelpers.has(key)) return;
   runningHelpers.set(key, rec);
   (async () => {
-    let text;
+    let text, settled = null;
     try {
       const conv = await harness.conversation(rec.conv, context);
       if (!conv) throw new Error("разговор помощника не найден");
-      let settled = await (await conv.submit({ type: "input", content: rec.task, requestId: `helper:${key}` }, context)).wait(context);
-      // Сторож прервал зависший шаг — сообщаем помощнику и даём продолжить (не больше MAX_RESTARTS раз)
-      while (settled.status !== "done" && rec.wakeNote && !rec.stopped && !closing) {
-        const note = rec.wakeNote; rec.wakeNote = null; rec.restarts = (rec.restarts ?? 0) + 1;
-        settled = await (await conv.submit({ type: "input", content: note, requestId: `helper:${key}:wd${rec.restarts}` }, context)).wait(context);
+      // Пауза после лимита переживает перезапуск (wakeAt в helpers.json): задание уже идёт в разговоре, не ставим заново
+      if (!rec.wakeAt) settled = await (await conv.submit({ type: "input", content: rec.task, requestId: `helper:${key}` }, context)).wait(context);
+      while (!closing && !rec.stopped) {
+        if (rec.wakeAt) {   // пауза: ждём сброс лимита и продолжаем с того же места
+          await sleepUntil(rec, rec.wakeAt);
+          if (closing || rec.stopped) break;
+          rec.wakeAt = null; rec.pauseUntil = null; saveStore();
+          rec.progress = { id: lastEntryId(rec.conv), at: Date.now() };
+          helperNote(`#${rec.n} продолжает`);
+          settled = await resumeRun(conv, rec, key);
+          continue;
+        }
+        if (!settled || settled.status === "done") break;
+        const detail = await errorText(conv, settled);
+        if (isLimitError(detail)) {   // лимит: не отчитываемся, а ставим на паузу
+          const at = limitResetAt(detail);
+          pauseAt(rec, at);
+          helperNote(helperLimitLine(rec.n, at));
+          continue;
+        }
+        if (rec.wakeNote) {   // сторож прервал зависший шаг — сообщаем помощнику и даём продолжить (не больше MAX_RESTARTS раз)
+          const note = rec.wakeNote; rec.wakeNote = null; rec.restarts = (rec.restarts ?? 0) + 1;
+          settled = await (await conv.submit({ type: "input", content: note, requestId: `helper:${key}:wd${rec.restarts}` }, context)).wait(context);
+          continue;
+        }
+        break;
       }
-      if (settled.status !== "done") text = rec.stopped ? "Остановлен по просьбе." : rec.giveUp ? `Остановлен сторожем: ${rec.giveUp}.` : isLimitError(settled) ? "Лимит модели исчерпан (429 / usage limit) — остановился, повторы не помогут. Нужно подождать сброса лимита или сменить провайдера." : `Не справился (${settled.reason ?? settled.status}).`;
-      else {
+      if (closing) return;            // pia закрывается — продолжит после перезапуска
+      if (settled?.status === "done") {
         const e = await conv.commit((tx) => tx.entry(AssistantEntry, settled.answer), context);
         text = (e?.model?.[0]?.content ?? []).filter((c) => c.type === "text").map((c) => c.text).join("").trim() || "(пустой отчёт)";
       }
+      else text = rec.stopped ? "Остановлен по просьбе." : rec.giveUp ? `Остановлен сторожем: ${rec.giveUp}.` : `Не справился (${settled?.reason ?? settled?.status ?? "?"}).`;
     } catch (e) {
       if (closing) return;            // pia закрывается — продолжит после перезапуска
       logErr("helper-bg", e); text = `Ошибка: ${e?.message ?? e}`;
@@ -188,7 +247,9 @@ function doingOf(rec) {
 }
 // Для экрана: работающие помощники и закончившие, чей отчёт ещё ждёт главного
 const helperItems = () => [
-  ...[...runningHelpers.values()].map((r) => ({ n: r.n, title: r.title, state: "работает", since: r.started, doing: doingOf(r) })),
+  ...[...runningHelpers.values()].map((r) => r.wakeAt
+    ? { n: r.n, title: r.title, state: "пауза", label: pauseLabel(r.pauseUntil), since: r.started }
+    : { n: r.n, title: r.title, state: "работает", since: r.started, doing: doingOf(r) }),
   ...[...helperTitles.values()].map((t) => ({ n: null, title: t, state: "работает", since: 0 })),
   ...pendingReports.map((r) => ({ n: r.n, title: r.title, state: "готов", since: 0 })),
 ].sort((a, b) => (a.n ?? 1e9) - (b.n ?? 1e9));
@@ -205,6 +266,7 @@ function lastEntryId(conv) {
 async function watchdogTick() {
   const now = Date.now();
   for (const [key, rec] of runningHelpers) {
+    if (rec.wakeAt) continue;   // на паузе после лимита — не зависший
     try {
       const id = lastEntryId(rec.conv), act = activity.get(String(rec.conv));
       if (id != null && id !== rec.progress?.id) rec.progress = { id, at: now };
@@ -453,14 +515,22 @@ export async function openCore() {
           const isStop = stopping || res.reason === "aborted" || res.reason === "withdrawn";
           if (isStop && saidStop) continue;
           if (isStop) saidStop = true;
-          feed.addService(isStop ? "Остановил." : `Не получилось ответить (${res.reason ?? res.status}).`);
+          if (isStop) { feed.addService("Остановил."); continue; }
+          const detail = await errorText(chat, res);
+          if (isLimitError(detail)) { const at = limitResetAt(detail); mainLimitUntil = at ?? Date.now() + RETRY_MS; feed.addService(mainLimitLine(at)); }
+          else feed.addService(`Не получилось ответить (${res.reason ?? res.status}).`);
           continue;
         }
         if (answered.has(res.answer)) continue;
         answered.add(res.answer);
         // Сам ответ попадает в ленту через watch
       }
-    } catch (err) { logErr("turn", err); feed.addService("Ошибка: " + (err?.message ?? err)); }
+    } catch (err) {
+      logErr("turn", err);
+      const msg = String(err?.message ?? err);
+      if (isLimitError(msg)) { const at = limitResetAt(msg); mainLimitUntil = at ?? Date.now() + RETRY_MS; feed.addService(mainLimitLine(at)); }
+      else feed.addService("Ошибка: " + msg);
+    }
     finally {
       await catchUp();   // watch мог отстать — дочитать записи до конца хода, чтобы ответ не потерял ключ потока
       busy = false; stopping = false; queue = []; extra = []; toolRunning = false;
@@ -557,6 +627,7 @@ export async function openCore() {
   }, 500);
   const watchdogTimer = setInterval(() => { watchdogTick(); }, 15_000);
 
+  helperNote = (t) => feed.addService(t);
   // Помощники, не доработавшие в прошлый раз, продолжают (повторная отправка с тем же requestId не дублирует задачу)
   for (const [key, rec] of Object.entries(store.items)) watchHelper(key, rec);
   flushReports();

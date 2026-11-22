@@ -478,7 +478,7 @@ export function statusRow(label, startedAt, cols, typed = "") {
 // helpers: [{ n, title, state: "работает" | "готов", since, doing? }]
 export const workersWord = (n) => `${n} ${plural(n, "работяга", "работяги", "работяг")}`;
 export function helpersSummary(helpers) {
-  const k = helpers.filter((h) => h.state === "работает").length;
+  const k = helpers.filter((h) => h.state === "работает" || h.state === "пауза").length;
   return k ? workersWord(k) : "";
 }
 // Время работы коротко: «12 с», «3 мин», «1 ч 05 мин»
@@ -515,7 +515,7 @@ export function shortTitle(title) {
   if (r.startsWith("«") && !r.includes("»")) r = r.slice(1);
   return r || "задача";
 }
-const working = (helpers) => helpers.filter((h) => h.state === "работает");
+const working = (helpers) => helpers.filter((h) => h.state === "работает" || h.state === "пауза");   // пауза после лимита — тоже в списке
 // Свёрнутая строка: «2 работяги» серым, в ширину окна
 function summaryLine(helpers, cols) {
   return "  " + fg(C.status) + clipEnd(helpersSummary(helpers), Math.max(1, cols - 2)) + RESET;
@@ -543,8 +543,8 @@ export function helperListRows(helpers, cols) {
   const list = working(helpers);
   const more = list.length > LIST_MAX ? list.length - (LIST_MAX - 1) : 0;
   const shown = more ? list.slice(0, LIST_MAX - 1) : list;
-  const name = (h) => safeText(shortTitle(h.title));
-  const time = (h) => (h.since ? workTime(now - h.since) : "");
+  const name = (h) => h.state === "пауза" ? safeText(`#${h.n} — ${h.label}`) : safeText(shortTitle(h.title));
+  const time = (h) => (h.state !== "пауза" && h.since ? workTime(now - h.since) : "");
   // «  ├ вставка скриншотов   3 мин»; узко — время убирается, название обрезается «…»
   let tW = Math.max(0, ...shown.map((h) => strWidth(time(h))));
   if (cols - 4 - (tW ? 2 + tW : 0) < 8) tW = 0;
