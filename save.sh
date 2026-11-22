@@ -1,5 +1,5 @@
 #!/bin/bash
-# Ручное сохранение кода pia в репозиторий GitHub (белый список в .gitignore).
+# Ручное сохранение кода pia в приватный репозиторий GitHub (белый список в .gitignore).
 cd "$HOME/.pi-agent" || exit 1
 mkdir -p launchd
 git add -A

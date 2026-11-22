@@ -2,7 +2,7 @@
 # Сборка pia.app: swift build (SDK 26.5 — в SDK 27 у Command Line Tools нет плагина SwiftUIMacros для @State),
 # бандл, значок, подпись постоянным самоподписанным сертификатом «pia local signing» (права macOS не сбрасываются),
 # рантайм pia (копия Node в Contents/MacOS/pia, подписана вместе с бандлом),
-# установка в ~/Applications/pia.app + автозапуск (~/Library/LaunchAgents/com.pi-agent.chat.plist, из ../launchd/com.pi-agent.chat.plist.template).  Запуск: ./build.sh [--no-install]
+# установка в ~/Applications/pia.app; службы server и chat — внутри бандла (Contents/Library/LaunchAgents, из ../launchd/*.plist.template), регистрация SMAppService.  Запуск: ./build.sh [--no-install]
 set -e
 cd "${0:A:h}"
 # SDK: берём 26.5, иначе любой 26.x (в CLT с SDK 27 swift build падает на @State); Xcode.app — запасной путь
@@ -32,7 +32,7 @@ BIN=$(SDKROOT=$SDK swift build -c release --show-bin-path)/PiaChat
 APP=build/pia.app
 rm -rf $APP
 mkdir -p $APP/Contents/MacOS $APP/Contents/Resources
-cp $BIN $APP/Contents/MacOS/PiaChat
+cp $BIN $APP/Contents/MacOS/pia-app   # исполняемый файл окна — pia-app: нигде не светится «PiaChat»
 cp Resources/Info.plist $APP/Contents/Info.plist
 # значок из Resources/icon-source.png
 if [ ! -f build/AppIcon.icns ] || [ Resources/icon-source.png -nt build/AppIcon.icns ]; then
@@ -44,6 +44,12 @@ if [ ! -f build/AppIcon.icns ] || [ Resources/icon-source.png -nt build/AppIcon.
   iconutil -c icns build/AppIcon.iconset -o build/AppIcon.icns
 fi
 cp build/AppIcon.icns $APP/Contents/Resources/AppIcon.icns
+# службы launchd внутри бандла (SMAppService): macOS покажет их в «Объектах входа» одной строкой «pia» со значком приложения.
+# Пути ~/.pi-agent в plist абсолютные (нельзя $HOME) — подставляются для текущего пользователя до подписи.
+mkdir -p $APP/Contents/Library/LaunchAgents
+for n in server chat; do
+  sed "s|__HOME__|$HOME|g" ../launchd/com.pi-agent.$n.plist.template > $APP/Contents/Library/LaunchAgents/com.pi-agent.$n.plist
+done
 # рантайм: копия Node под именем «pia» внутри бандла. Служба, CLI и работяги запускаются этим бинарём, поэтому в Терминале
 # («прервет процесс pia»), Мониторинге системы и Системных настройках (Запись экрана, Доступ к диску) вместо «node» видно «pia».
 # Берётся тот Node, с которым стоят node_modules: PIA_NODE, иначе ~/.local/share/pi-node/current/bin/node, иначе node из PATH.
@@ -75,19 +81,21 @@ fi
 codesign -dvv $APP 2>&1 | grep -E "Identifier|Authority|Signature" || true
 codesign -d -r- $APP 2>&1 | tail -1
 if [ "$1" != "--no-install" ]; then
-  # автозапуск: LaunchAgent com.pi-agent.chat (при входе — в фоне без окна, --hidden; при падении — перезапуск)
-  AGENT=~/Library/LaunchAgents/com.pi-agent.chat.plist
-  launchctl bootout gui/$(id -u)/com.pi-agent.chat 2>/dev/null || true
-  pkill -x PiaChat 2>/dev/null && sleep 0.5 || true
+  # Установка: старые службы (~/Library/LaunchAgents/com.pi-agent.*.plist, схема до SMAppService) выгружаются и уходят в бэкап,
+  # окно и службы ставятся из бандла и регистрируются через SMAppService (pia-app --register-only; потом окно делает это само при запуске).
+  U=$(id -u); OLD=~/Library/LaunchAgents; BK=~/.pi-agent/backups/legacy-agents-$(date +%Y%m%d-%H%M%S)
+  for L in chat server memory; do
+    if [ -f $OLD/com.pi-agent.$L.plist ]; then mkdir -p $BK; launchctl bootout gui/$U/com.pi-agent.$L 2>/dev/null || true; mv $OLD/com.pi-agent.$L.plist $BK/; fi
+  done
+  [ -d "$BK" ] && echo "старые plist перенесены в $BK"
+  ~/Applications/pia.app/Contents/MacOS/pia-app --unregister >/dev/null 2>&1 || true
+  pkill -x pia-app 2>/dev/null && sleep 0.5 || true
+  pkill -x PiaChat 2>/dev/null || true
   mkdir -p ~/Applications
   rm -rf ~/Applications/pia.app
   ditto $APP ~/Applications/pia.app
   LSR=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
   $LSR -u $PWD/$APP 2>/dev/null || true; $LSR -f ~/Applications/pia.app || true
-  TPL=${0:A:h}/../launchd/com.pi-agent.chat.plist.template
-  [ -f "$TPL" ] || { echo "нет шаблона $TPL"; exit 1; }
-  mkdir -p ~/Library/LaunchAgents
-  sed "s|__HOME__|$HOME|g" "$TPL" > $AGENT
-  launchctl bootstrap gui/$(id -u) $AGENT
-  echo "установлено: ~/Applications/pia.app (работает в фоне; окно — двойное нажатие правого Shift, pia://show, open -a pia)"
+  ~/Applications/pia.app/Contents/MacOS/pia-app --register-only
+  echo "установлено: ~/Applications/pia.app (службы server и chat — в бандле, через SMAppService; окно — двойной правый Option/Shift, pia://show, open -a pia)"
 fi

@@ -58,6 +58,8 @@ try {
   const port = await listen(server, [prev?.port, DEFAULT_PORT].filter(Boolean));
   writeServerFile(file, { port, token });
   keepAwake = createKeepAwake({ getState: () => core.state(), log });
+  // Память: раз в 30 минут (и при старте) — разбор разговора дочерним процессом pia; отдельной службы нет
+  { const { kickMemoryWorker } = await import("./core.mjs"); setTimeout(kickMemoryWorker, 15_000).unref(); setInterval(kickMemoryWorker, 30 * 60_000).unref(); }
   keepAwake.start();
   log(`готов: 127.0.0.1:${port}, запуск ${Date.now() - t0} мс`);
 } catch (e) {

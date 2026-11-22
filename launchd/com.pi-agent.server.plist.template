@@ -1,18 +1,20 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Лежит внутри pia.app/Contents/Library/LaunchAgents (build.sh подставляет __HOME__) и регистрируется через SMAppService:
+     macOS показывает службу в «Объектах входа» под приложением pia, с его значком. -->
 <plist version="1.0"><dict>
   <key>Label</key><string>com.pi-agent.server</string>
+  <key>BundleProgram</key><string>Contents/MacOS/pia</string>
   <key>ProgramArguments</key><array>
-    <string>__RUNTIME__</string>
+    <string>pia</string>
     <string>__HOME__/.pi-agent/daemon.mjs</string>
   </array>
   <key>WorkingDirectory</key><string>__HOME__/.pi-agent/pia</string>
   <key>EnvironmentVariables</key><dict>
     <key>NODE_NO_WARNINGS</key><string>1</string>
     <key>LANG</key><string>ru_RU.UTF-8</string>
-    <key>PATH</key><string>__HOME__/.local/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>PATH</key><string>__HOME__/.pi-agent/runtime-bin:__HOME__/.local/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
   </dict>
-  <key>AssociatedBundleIdentifiers</key><array><string>com.pi-agent.chat</string></array>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
   <key>ThrottleInterval</key><integer>10</integer>

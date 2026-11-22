@@ -1,0 +1,6 @@
+#!/bin/sh
+# «node» для программ, которые запускает pia (MCP-серверы через npx, shebang «env node»): подменяется рантаймом pia из бандла,
+# чтобы в «Записи экрана», Мониторинге и Терминале это был «pia», а не «node». Нет бандла — настоящий Node.
+R="$HOME/Applications/pia.app/Contents/MacOS/pia"
+[ -x "$R" ] || R="$HOME/.local/share/pi-node/current/bin/node"
+exec "$R" "$@"

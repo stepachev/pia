@@ -8,7 +8,9 @@ import { readServerFile } from "./server.mjs";
 
 export const SERVER_FILE = `${APP}/server.json`;
 export const LABEL = "com.pi-agent.server";
-export const PLIST = `${os.homedir()}/Library/LaunchAgents/${LABEL}.plist`;
+// Служба лежит внутри pia.app (Contents/Library/LaunchAgents) и регистрируется через SMAppService (pia-app --register-only)
+export const PLIST = `${os.homedir()}/Applications/pia.app/Contents/Library/LaunchAgents/${LABEL}.plist`;
+const WINDOW_BIN = `${os.homedir()}/Applications/pia.app/Contents/MacOS/pia-app`;
 const DOMAIN = `gui/${process.getuid?.() ?? 501}`;
 // Проверочный экземпляр (PIA_HOME) служба launchd не трогает — запускает свой процесс
 const useLaunchd = () => !process.env.PIA_HOME && fs.existsSync(PLIST);
@@ -74,7 +76,7 @@ export async function lockHolder() {
 export async function serviceLoaded() { return (await run("launchctl", ["print", `${DOMAIN}/${LABEL}`])).ok; }
 export async function startService() {
   if (useLaunchd()) {
-    if (!(await serviceLoaded())) return run("launchctl", ["bootstrap", DOMAIN, PLIST]);
+    if (!(await serviceLoaded())) { await run(WINDOW_BIN, ["--register-only"]); if (await serviceLoaded()) return { ok: true, out: "" }; }
     return run("launchctl", ["kickstart", `${DOMAIN}/${LABEL}`]);
   }
   // Без launchd (проверочный экземпляр или служба не установлена) — отдельный процесс в фоне

@@ -82,6 +82,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         NSScrollView.piaHideScrollers()
         Log.write("запуск pia.app, сервер: \(model.client.configPath)")
         NSApp.setActivationPolicy(.accessory)
+        Autostart.ensureRegistered().forEach { Log.write("автозапуск: \($0)") }   // идемпотентно: служба и окно в «Объектах входа» под pia
         buildMenu()
         buildPanel()
         launched = true

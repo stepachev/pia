@@ -36,6 +36,7 @@ write_wrapper() {  # $1 — файл, $2 — аргументы после agent
   cat > "$1" <<WRAP
 #!/bin/sh
 export NODE_NO_WARNINGS=1
+export PATH="\$HOME/.pi-agent/runtime-bin:\$PATH"
 R="\$HOME/Applications/pia.app/Contents/MacOS/pia"
 [ -x "\$R" ] || R="\$HOME/.local/share/pi-node/current/bin/node"
 exec "\$R" "\$HOME/.pi-agent/agent.mjs" $2"\$@"
@@ -44,7 +45,7 @@ WRAP
 }
 render_plists() {  # $1 — папка назначения
   mkdir -p "$1"
-  for n in server memory chat; do
+  for n in server chat; do
     sed -e "s|__HOME__|$HOME|g" -e "s|__RUNTIME__|$(runtime)|g" "$ROOT/launchd/com.pi-agent.$n.plist.template" > "$1/com.pi-agent.$n.plist" || return 1
   done
 }
@@ -67,7 +68,7 @@ MACV=$(sw_vers -productVersion); MAJOR=${MACV%%.*}
 [ "$MAJOR" -ge 13 ] 2>/dev/null || die "macOS $MACV слишком старая (нужна 13+)"
 ARCH=$(uname -m)
 ok "macOS $MACV, $ARCH"
-[ "$ROOT" = "$HOME/.pi-agent" ] || die "репозиторий должен лежать в ~/.pi-agent (сейчас $ROOT). Выполни: git clone https://github.com/stepachev/pia ~/.pi-agent"
+[ "$ROOT" = "$HOME/.pi-agent" ] || die "репозиторий должен лежать в ~/.pi-agent (сейчас $ROOT). Выполни: gh repo clone stepachev/pia-private ~/.pi-agent"
 
 if ! xcode-select -p >/dev/null 2>&1 || ! xcrun --find swift >/dev/null 2>&1; then
   if [ "$DRY" = 1 ]; then todo "нет Command Line Tools — запустил бы xcode-select --install"; else
@@ -87,7 +88,7 @@ done
 
 # ── уже установлено? ──
 if [ "$UPDATE" = 0 ] && [ -f "$ROOT/node_modules/.package-lock.json" ] && [ -x "$NODE" ] && [ -x "$BIN/pia" ] \
-   && loaded com.pi-agent.server && [ -d "$APP" ] && [ -x "$APP/Contents/MacOS/pia" ] && loaded com.pi-agent.chat; then
+   && loaded com.pi-agent.server && [ -d "$APP" ] && [ -x "$APP/Contents/MacOS/pia-app" ] && loaded com.pi-agent.chat; then
   step "pia уже установлено"
   ok "служба com.pi-agent.server и окно com.pi-agent.chat работают"
   ALREADY=1
@@ -140,17 +141,18 @@ else
   fi
 fi
 mkdir -p "$ROOT/pia" 2>/dev/null
-# mcp.json — личный файл (не в git). По умолчанию пустой: никакие MCP-серверы не ставятся
-if [ ! -f "$ROOT/mcp.json" ]; then
-  if [ "$DRY" = 1 ]; then todo "создал бы пустой mcp.json"; else
-    printf '{"mcpServers": {}}\n' > "$ROOT/mcp.json" && ok "mcp.json создан пустым (подключения MCP — по желанию, см. README)"
+# пути в mcp.json жёстко прописаны под первого владельца — подставляем свой дом
+if grep -q '/Users/stpchv' "$ROOT/mcp.json" 2>/dev/null && [ "$HOME" != /Users/stpchv ]; then
+  if [ "$DRY" = 1 ]; then todo "поправил бы пути в mcp.json на $HOME"; else
+    sed -i '' "s|/Users/stpchv|$HOME|g" "$ROOT/mcp.json" && git -C "$ROOT" update-index --skip-worktree mcp.json 2>/dev/null
+    ok "mcp.json: пути под $HOME"
   fi
 fi
 
 # ── 4. команда pia ──
 step "4. Команда pia"
 # обёртки запускают рантайм из pia.app (имя процесса «pia»); обновляются и у тех, у кого стояли старые (с node)
-if [ -x "$BIN/pia" ] && grep -q 'pia.app' "$BIN/pia" && [ -x "$BIN/pia-login" ] && grep -q 'pia.app' "$BIN/pia-login"; then ok "$BIN/pia и pia-login на месте"; else
+if [ -x "$BIN/pia" ] && grep -q 'runtime-bin' "$BIN/pia" && [ -x "$BIN/pia-login" ] && grep -q 'runtime-bin' "$BIN/pia-login"; then ok "$BIN/pia и pia-login на месте"; else
   if [ "$DRY" = 1 ]; then todo "создал бы $BIN/pia и $BIN/pia-login"; else
     # pia-login = то же меню выбора провайдера, что и `pia login` (agent.mjs → login.mjs); тот же ~/.pi/agent/auth.json
     write_wrapper "$BIN/pia" ""; write_wrapper "$BIN/pia-login" "login "
@@ -195,7 +197,7 @@ CNF
     unset PW
   fi
 fi
-if [ -d "$APP" ] && [ -x "$APP/Contents/MacOS/pia" ] && loaded com.pi-agent.chat && [ "$UPDATE" = 0 ]; then ok "pia.app установлено, агент окна загружен"; else
+if [ -d "$APP" ] && [ -x "$APP/Contents/MacOS/pia-app" ] && loaded com.pi-agent.chat && [ "$UPDATE" = 0 ]; then ok "pia.app установлено, агент окна загружен"; else
   if [ "$SDKOK" = 0 ]; then warn "окно пропущено (нет SDK)"; elif [ "$DRY" = 1 ]; then todo "собрал бы окно (mac-app/build.sh) и поставил в ~/Applications/pia.app"; else
     echo "  … сборка окна (несколько минут)"
     if (cd "$ROOT/mac-app" && timeout 1500 ./build.sh >"$ROOT/mac-app/build.log" 2>&1); then ok "окно собрано и установлено (~/Applications/pia.app)"; else
@@ -204,28 +206,17 @@ if [ -d "$APP" ] && [ -x "$APP/Contents/MacOS/pia" ] && loaded com.pi-agent.chat
   fi
 fi
 # ── 6. службы ──
-step "6. Службы (LaunchAgents)"
-TMPL=$(mktemp -d); render_plists "$TMPL" || die "не удалось сгенерировать plist"
-mkdir -p "$LAB"
-for n in server memory; do
-  L=com.pi-agent.$n
-  if loaded $L; then
-    ok "$L уже загружена"
-    # миграция со старой схемы (служба запускала node напрямую): новый plist кладём рядом, применяется после перезапуска службы
-    if [ "$UPDATE" = 1 ] && [ "$DRY" = 0 ] && [ -x "$(runtime)" ] && ! grep -q 'pia.app' "$LAB/$L.plist" 2>/dev/null; then
-      cp "$LAB/$L.plist" "$LAB/$L.plist.before-runtime" && cp "$TMPL/$L.plist" "$LAB/$L.plist"
-      warn "$L: plist обновлён (запуск через pia.app); применится после: launchctl bootout gui/$UID_/$L; launchctl bootstrap gui/$UID_ $LAB/$L.plist"
-    fi
-    continue
-  fi
-  if [ -f "$LAB/$L.plist" ]; then warn "$LAB/$L.plist есть, но не загружен — загружаю существующий"; else
-    do_ cp "$TMPL/$L.plist" "$LAB/$L.plist"
-  fi
-  if [ "$DRY" = 1 ]; then todo "launchctl bootstrap $L"; else
-    launchctl bootstrap "gui/$UID_" "$LAB/$L.plist" 2>/dev/null && ok "$L запущена" || warn "$L не загрузилась (launchctl bootstrap)"
-  fi
-done
-rm -rf "$TMPL"
+step "6. Службы (внутри pia.app, SMAppService)"
+# Службы server и chat лежат в pia.app/Contents/Library/LaunchAgents и регистрируются через SMAppService (их ставит build.sh;
+# окно при каждом запуске перепроверяет). Память запускается изнутри службы server раз в 30 минут. В «Объектах входа» — одна строка «pia».
+if [ -x "$APP/Contents/MacOS/pia-app" ]; then
+  for L in com.pi-agent.server com.pi-agent.chat; do
+    loaded $L && ok "$L загружена" || { do_ "$APP/Contents/MacOS/pia-app" --register-only >/dev/null; loaded $L && ok "$L зарегистрирована" || warn "$L не загрузилась: открой Системные настройки → Основные → Объекты входа и включи «pia»"; }
+  done
+else
+  warn "pia.app не собрано — служба недоступна (нужен SDK 26.x; см. выше)"
+fi
+# старые plist предыдущих версий (~/Library/LaunchAgents/com.pi-agent.*.plist) build.sh переносит в ~/.pi-agent/backups/legacy-agents-*
 
 fi  # ALREADY=0
 

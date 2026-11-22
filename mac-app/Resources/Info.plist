@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
 	<key>CFBundleDevelopmentRegion</key><string>ru</string>
-	<key>CFBundleExecutable</key><string>PiaChat</string>
+	<key>CFBundleExecutable</key><string>pia-app</string>
 	<key>CFBundleIdentifier</key><string>com.pi-agent.chat</string>
 	<key>CFBundleName</key><string>pia</string>
 	<key>CFBundleDisplayName</key><string>pia</string>

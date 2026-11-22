@@ -1,9 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Окно pia: автозапуск при входе (без окна, --hidden). Внутри pia.app/Contents/Library/LaunchAgents, регистрируется через SMAppService. -->
 <plist version="1.0"><dict>
   <key>Label</key><string>com.pi-agent.chat</string>
+  <key>BundleProgram</key><string>Contents/MacOS/pia-app</string>
   <key>ProgramArguments</key><array>
-    <string>__HOME__/Applications/pia.app/Contents/MacOS/PiaChat</string>
+    <string>pia-app</string>
     <string>--hidden</string>
   </array>
   <key>RunAtLoad</key><true/>

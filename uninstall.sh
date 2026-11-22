@@ -3,12 +3,13 @@
 set -u
 UID_=$(id -u)
 echo "pia — удаление"
+"$HOME/Applications/pia.app/Contents/MacOS/pia-app" --unregister >/dev/null 2>&1
 for L in com.pi-agent.chat com.pi-agent.server com.pi-agent.memory; do
   launchctl bootout "gui/$UID_/$L" 2>/dev/null
   rm -f "$HOME/Library/LaunchAgents/$L.plist"
   echo "  ✓ $L выгружена и удалена"
 done
-pkill -x PiaChat 2>/dev/null
+pkill -x pia-app; pkill -x PiaChat 2>/dev/null
 rm -rf "$HOME/Applications/pia.app" && echo "  ✓ ~/Applications/pia.app удалено"
 rm -f "$HOME/.local/bin/pia" "$HOME/.local/bin/pia-login" && echo "  ✓ команды pia и pia-login удалены"
 cat <<'MSG'

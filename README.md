@@ -1,19 +1,13 @@
 # pia
 
-ИИ-помощник на Mac: фоновая служба (Node.js + Pi Durable, модели — любого провайдера, который поддерживает pi, по умолчанию Claude), команда `pia` в терминале и окно `pia.app` (автозапуск, двойной правый Shift).
-
-## Что нужно
-- Mac с macOS 13+ (окно собирается с SDK MacOSX 26.x — Command Line Tools или Xcode).
-- Доступ к модели: подписка или API-ключ любого провайдера pi либо локальная модель (вход — `pia login`, см. «Провайдеры и модели»; по умолчанию Claude).
-- Разрешения macOS окно попросит само, по одному и с пояснениями (см. «Разрешения macOS»); без них pia работает как обычный чат.
-- Для окна: Command Line Tools (`xcode-select --install`) с SDK macOS 26.x (`/Library/Developer/CommandLineTools/SDKs/MacOSX26*.sdk`) или Xcode; без него сборка окна остановится с сообщением.
-- Подключения MCP необязательны: по умолчанию не ставится ни один сервер (см. «Подключить свои сервисы (MCP)»).
+Личный ИИ-помощник на Mac: фоновая служба (Node.js + Pi Durable; модели — любого провайдера, который поддерживает pi, по умолчанию Claude), команда `pia` в терминале и окно `pia.app` (автозапуск, двойной правый Shift). Репозиторий приватный: github.com/stepachev/pia-private.
 
 ## Установка (одна команда)
 ```
-git clone https://github.com/stepachev/pia ~/.pi-agent && ~/.pi-agent/install.sh
+gh repo clone stepachev/pia-private ~/.pi-agent && ~/.pi-agent/install.sh
 ```
-Установщик идемпотентный: ставит Command Line Tools (если нет — попросит дождаться и запустить снова), Node 22 LTS, зависимости, команды `pia` и `pia-login`, службы LaunchAgents из `launchd/*.plist.template` (вместо `__HOME__` подставляется твоя домашняя папка), создаёт пустой `mcp.json` (без MCP-серверов), делает сертификат подписи, собирает и ставит окно. Если уже установлено — только сообщит. `./install.sh --check` — показать, что будет сделано, ничего не меняя; `./install.sh --update` — обновить код и окно.
+Нужен `gh auth login` (репозиторий приватный). Без gh: `git clone https://github.com/stepachev/pia-private.git ~/.pi-agent` (спросит вход GitHub), затем `~/.pi-agent/install.sh`.
+Установщик идемпотентный: ставит Command Line Tools (если нет — попросит дождаться и запустить снова), Node 22 LTS, зависимости, команды `pia` и `pia-login`, службы LaunchAgents из `launchd/*.plist.template`, сертификат подписи, собирает и ставит окно. Если уже установлено — только сообщит. `./install.sh --check` — показать, что будет сделано, ничего не меняя; `./install.sh --update` — обновить код и окно.
 
 ## Провайдеры и модели
 pia не привязана к Claude: подключается любой провайдер из библиотеки pi (`@earendil-works/pi-ai`): Anthropic (подписка Claude или API-ключ), OpenAI и ChatGPT Plus/Pro (Codex), Google Gemini, OpenRouter, GitHub Copilot, xAI (Grok), Groq, DeepSeek, Mistral, Cerebras, Fireworks, Hugging Face, Amazon Bedrock, Azure, Vertex и другие (полный список — `pia login` → «Другой провайдер»), а также локальные модели (Ollama, LM Studio, vLLM — любой OpenAI-совместимый адрес).
@@ -71,24 +65,9 @@ OpenRouter (`pia login openrouter`): модели разных авторов ч
 «Мониторинг ввода» и другие доступы не нужны.
 
 ## Сохранение и удаление
-- Сохранить свои правки в git: `./save.sh` (белый список в `.gitignore`, проверка на секреты; свои шаблоны для проверки — по строке в `~/.pi-agent/secrets/save-patterns.txt`, файл вне git). Память (`pia/память/`), история (`*.sqlite`), `auth.json`, `mac-app/signing/` в репозиторий не попадают — копируй отдельно.
+- Сохранить код в GitHub: `./save.sh` (белый список в `.gitignore`, проверка на секреты). Память (`pia/память/`), история (`*.sqlite`), `auth.json`, `mac-app/signing/` в репозиторий не попадают — копируй отдельно.
 - Удалить: `./uninstall.sh` (службы, окно, команды; `~/.pi-agent` и память не трогает).
-- MCP: см. раздел «Подключить свои сервисы (MCP)» ниже.
-
-## Подключить свои сервисы (MCP)
-По умолчанию установщик создаёт `~/.pi-agent/mcp.json` с пустым списком — `{"mcpServers": {}}`, никакие серверы не подключаются и окон входа не открывается. Файл личный, в git не попадает. Нужный сервис добавь сам в `mcpServers`:
-```json
-{
-  "mcpServers": {
-    "my-http": { "url": "https://example.com/mcp", "bearerFile": "~/.pi-agent/secrets/my-http.token" },
-    "my-stdio": { "command": "/Users/ИМЯ/.local/bin/npx", "args": ["-y", "некий-пакет-mcp"], "env": { "KEY": "значение" } }
-  }
-}
-```
-- `url` — http-сервер (токен — в поле `headers` или в файле через `bearerFile`); `command`/`args`/`env` — локальный сервер (например через `npx`); `"disabled": true` — временно выключить.
-- Секреты держи в `~/.pi-agent/secrets/`, не в репозитории.
-- Применить: `pia --restart` (обрывает работающих помощников). Какие серверы подключились — спроси у помощника.
-- Необязательный пример: Notion/Framer через `npx -y mcp-remote https://mcp.notion.com/mcp` (откроется окно входа в браузере); Figma — `@figwright/mcp` плюс плагин Figwright в Figma.
+- MCP (`mcp.json`): `notion`/`framer` — через `npx mcp-remote` (при первом запуске откроется браузер), `yab-browser` — нужен `/Applications/yab.app`, `figwright` — плюс плагин Figwright в Figma.
 
 ## Правила для агентов, правящих pia
 - **Тесты не писать и не запускать** (решение пользователя). Проверка — `node --check *.mjs`, `mac-app/build.sh --no-install`, `bash -n`.
@@ -99,3 +78,7 @@ OpenRouter (`pia login openrouter`): модели разных авторов ч
 - Журналы: `~/.pi-agent/*.log`, `mac-app/app.log`.
 
 ## Инструменты
+
+
+## Автозапуск и «Объекты входа» (SMAppService)
+Службы `com.pi-agent.server` (сервер + память раз в 30 минут изнутри) и `com.pi-agent.chat` (окно, `--hidden`) лежат **внутри** `pia.app/Contents/Library/LaunchAgents` (plist генерирует `mac-app/build.sh` из `launchd/*.plist.template`) и регистрируются через `SMAppService` (`pia-app --register-only`; окно делает это и само при каждом запуске). В Системных настройках → Объекты входа это одна строка «pia» со значком приложения. Исполняемый файл окна — `Contents/MacOS/pia-app`, рантайм Node — `Contents/MacOS/pia`. `runtime-bin/node` — обёртка «node» → рантайм pia для MCP-серверов (PATH службы). Старые plist из `~/Library/LaunchAgents` build.sh переносит в `~/.pi-agent/backups/legacy-agents-*`. Состояние: `pia-app --autostart-status`.
