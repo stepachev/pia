@@ -150,8 +150,14 @@ final class PiaTextView: NSTextView {
         tracking = t
     }
 
+    /// Точка окна закрыта другим видом поверх текста (область-хват сверху, когда лента прокручена под неё):
+    /// тогда курсор ставит тот вид — иначе I-beam текста перебивал руку хвата местами.
+    private func covered(atWindowPoint wp: NSPoint) -> Bool {
+        GrabStripView.all.allObjects.contains { $0.window === window && !$0.isHiddenOrHasHiddenAncestor && $0.convert($0.bounds, to: nil).contains(wp) }
+    }
+
     private func updateCursor(_ e: NSEvent) {
-        guard selectableText else { return }
+        guard selectableText, !covered(atWindowPoint: e.locationInWindow) else { return }
         (link(atWindowPoint: e.locationInWindow) != nil ? NSCursor.pointingHand : NSCursor.iBeam).set()
     }
 
@@ -160,12 +166,44 @@ final class PiaTextView: NSTextView {
     override func cursorUpdate(with e: NSEvent) { updateCursor(e) }
     override func mouseExited(with e: NSEvent) {
         super.mouseExited(with: e)
-        if selectableText { NSCursor.arrow.set() }
+        if selectableText, !covered(atWindowPoint: e.locationInWindow) { NSCursor.arrow.set() }
     }
 
     override func resetCursorRects() {
         guard selectableText else { return }
-        super.resetCursorRects()   // TextKit 1: I-beam на весь текст + pointingHand над ссылками (linkTextAttributes .cursor)
+        // часть текста под областью-хватом: там курсор — рука хвата, I-beam только вне её
+        let vis = visibleRect
+        let under = GrabStripView.all.allObjects.filter { $0.window === window && !$0.isHiddenOrHasHiddenAncestor }
+            .map { convert($0.bounds, from: $0).intersection(vis) }.filter { !$0.isEmpty }
+        guard !under.isEmpty else {
+            super.resetCursorRects()   // TextKit 1: I-beam на весь текст + pointingHand над ссылками (linkTextAttributes .cursor)
+            return
+        }
+        var rects = [vis]
+        for u in under { rects = rects.flatMap { Self.subtract($0, u) } }
+        for r in rects where !r.isEmpty { addCursorRect(r, cursor: .iBeam) }   // ссылки — рукой-указателем через mouseMoved
+    }
+
+    /// r минус u — до 4 прямоугольников
+    private static func subtract(_ r: NSRect, _ u: NSRect) -> [NSRect] {
+        let i = r.intersection(u)
+        guard !i.isEmpty else { return [r] }
+        return [NSRect(x: r.minX, y: r.minY, width: r.width, height: i.minY - r.minY),
+                NSRect(x: r.minX, y: i.maxY, width: r.width, height: r.maxY - i.maxY),
+                NSRect(x: r.minX, y: i.minY, width: i.minX - r.minX, height: i.height),
+                NSRect(x: i.maxX, y: i.minY, width: r.maxX - i.maxX, height: i.height)].filter { $0.width > 0 && $0.height > 0 }
+    }
+
+    /// лента прокручивается — текст уезжает под хват и обратно: пересчитать прямоугольники курсора
+    private var scrollObserver: NSObjectProtocol?
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if let o = scrollObserver { NotificationCenter.default.removeObserver(o); scrollObserver = nil }
+        guard window != nil, let clip = enclosingScrollView?.contentView else { return }
+        clip.postsBoundsChangedNotifications = true
+        scrollObserver = NotificationCenter.default.addObserver(forName: NSView.boundsDidChangeNotification, object: clip, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { if let self { self.window?.invalidateCursorRects(for: self) } }
+        }
     }
 
     override func hitTest(_ p: NSPoint) -> NSView? { selectableText ? super.hitTest(p) : nil }
