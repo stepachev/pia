@@ -3,7 +3,7 @@
 // Окна подключаются по HTTP: адрес и ключ — в ~/.pi-agent/server.json (права 600), слушает только 127.0.0.1.
 import fs from "node:fs";
 import { execFileSync } from "node:child_process";
-import { APP } from "./shared.mjs";
+import { APP, WORKDIR } from "./shared.mjs";
 import { createKeepAwake } from "./keep-awake.mjs";
 import { createServer, listen, newToken, readServerFile, writeServerFile } from "./server.mjs";
 
@@ -30,6 +30,19 @@ process.on("exit", releaseLock);
 process.on("exit", () => { try { keepAwake?.stop(); } catch {} });
 
 let core, server, closing = false, keepAwake;
+
+const IMAGES = `${WORKDIR}/mac-images`, IMAGES_KEEP_DAYS = 3;
+function cleanImages() {
+  const cutoff = Date.now() - IMAGES_KEEP_DAYS * 86400_000;
+  let n = 0, bytes = 0;
+  let list = []; try { list = fs.readdirSync(IMAGES, { withFileTypes: true }); } catch { return; }
+  for (const d of list) {
+    if (!d.isFile()) continue;
+    const p = `${IMAGES}/${d.name}`;
+    try { const st = fs.statSync(p); if (st.mtimeMs < cutoff) { fs.unlinkSync(p); n++; bytes += st.size; } } catch {}
+  }
+  if (n) log(`картинки: удалено ${n} старше ${IMAGES_KEEP_DAYS} дней (${(bytes / 1048576).toFixed(1)} МБ)`);
+}
 async function shutdown(code, why) {
   if (closing) return; closing = true;
   log(`останавливаюсь: ${why}`);
@@ -60,6 +73,9 @@ try {
   keepAwake = createKeepAwake({ getState: () => core.state(), log });
   // Память: раз в 30 минут (и при старте) — разбор разговора дочерним процессом pia; отдельной службы нет
   { const { kickMemoryWorker } = await import("./core.mjs"); setTimeout(kickMemoryWorker, 15_000).unref(); setInterval(kickMemoryWorker, 30 * 60_000).unref(); }
+  // Картинки из окна pia (снимки контекста, вставки): в разговор они уже вшиты, файлы нужны лишь для показа в старых
+  // сообщениях — старше 3 дней удаляем (через минуту после запуска и раз в 6 часов)
+  setTimeout(cleanImages, 60_000).unref(); setInterval(cleanImages, 6 * 3600_000).unref();
   keepAwake.start();
   log(`готов: 127.0.0.1:${port}, запуск ${Date.now() - t0} мс`);
 } catch (e) {
