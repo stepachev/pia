@@ -1,6 +1,6 @@
 # pia
 
-Личный ИИ-помощник на Mac: фоновая служба (Node.js + Pi Durable; модели — любого провайдера, который поддерживает pi, по умолчанию Claude), команда `pia` в терминале и окно `pia.app` (автозапуск, двойной правый Shift). Репозиторий публичный: github.com/stepachev/pia.
+Личный ИИ-помощник для Mac. Работает с любым провайдером (Claude, ChatGPT, Gemini, OpenRouter, локальные модели и др.). Состоит из фоновой службы (Node.js + Pi Durable), команды `pia` в терминале и окна `pia.app` (автозапуск): двойной правый Shift открывает окно с захватом контекста, двойной правый Option — показывает/прячет окно без контекста. Репозиторий публичный: github.com/stepachev/pia.
 
 ## Установка (одна команда)
 ```
@@ -10,7 +10,7 @@ git clone https://github.com/stepachev/pia.git ~/.pi-agent && ~/.pi-agent/instal
 Установщик идемпотентный: ставит Command Line Tools (если нет — попросит дождаться и запустить снова), Node 22 LTS, зависимости, команды `pia` и `pia-login`, службы LaunchAgents из `launchd/*.plist.template`, сертификат подписи, собирает и ставит окно. Если уже установлено — только сообщит. `./install.sh --check` — показать, что будет сделано, ничего не меняя; `./install.sh --update` — обновить код и окно.
 
 ## Провайдеры и модели
-pia не привязана к Claude: подключается любой провайдер из библиотеки pi (`@earendil-works/pi-ai`): Anthropic (подписка Claude или API-ключ), OpenAI и ChatGPT Plus/Pro (Codex), Google Gemini, OpenRouter, GitHub Copilot, xAI (Grok), Groq, DeepSeek, Mistral, Cerebras, Fireworks, Hugging Face, Amazon Bedrock, Azure, Vertex и другие (полный список — `pia login` → «Другой провайдер»), а также локальные модели (Ollama, LM Studio, vLLM — любой OpenAI-совместимый адрес).
+pia работает с любым провайдером из библиотеки pi (`@earendil-works/pi-ai`): Anthropic (подписка Claude или API-ключ), OpenAI и ChatGPT Plus/Pro (Codex), Google Gemini, OpenRouter, GitHub Copilot, xAI (Grok), Groq, DeepSeek, Mistral, Cerebras, Fireworks, Hugging Face, Amazon Bedrock, Azure, Vertex и другие (полный список — `pia login` → «Другой провайдер»), а также локальные модели (Ollama, LM Studio, vLLM — любой OpenAI-совместимый адрес).
 
 **Как подключить**
 1. `pia login` — меню провайдеров (или сразу `pia login openai`, `pia login local`). Для подписки откроется браузер, для остальных спросит API-ключ (ввод скрыт).
@@ -20,7 +20,7 @@ pia не привязана к Claude: подключается любой пр�
 
 **Роли:** `main` — главный (оркестратор); `smart` — помощник по умолчанию (`helper` с `model: smart`); `fast` — дешёвый помощник; `opus` — самая мощная модель провайдера (`model: opus`); `memory` — фоновый разбор памяти; `compact` — пересказ при сжатии разговора. Чего нет в файле — берётся из готового набора провайдера или у соседней роли (`smart`/`opus` ← `main`, `fast` ← `smart`, `memory`/`compact` ← `fast`).
 
-**Конфиг** `~/.pi-agent/models.json` (вне git; другой путь — переменная `PIA_MODELS`). Нет файла — всё как раньше: Claude (Opus 5.5 главный и opus, Sonnet 5.5 smart, Haiku 5.5 fast/память). Роль — `"модель"`, `"провайдер/модель"` или `{ "provider", "model", "thinking" }` (`thinking`: off, minimal, low, medium, high, xhigh — подгоняется под возможности модели). Id моделей — из каталога pi-ai.
+**Конфиг** `~/.pi-agent/models.json` (вне git; другой путь — переменная `PIA_MODELS`). Нет файла — набор по умолчанию: Claude (Opus 5.5 главный и opus, Sonnet 5.5 smart, Haiku 5.5 fast/память). Роль — `"модель"`, `"провайдер/модель"` или `{ "provider", "model", "thinking" }` (`thinking`: off, minimal, low, medium, high, xhigh — подгоняется под возможности модели). Id моделей — из каталога pi-ai.
 
 Примеры:
 ```json
