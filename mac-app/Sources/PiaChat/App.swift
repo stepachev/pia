@@ -8,6 +8,8 @@ final class PiaPanel: NSPanel {
     static let margin: CGFloat = 40   // поле под тень: мягкая тень (σ 14 ≈ blur 28) + смещение 11 вниз гаснет до края окна
     var onCancel: () -> Void = {}
     var onResized: () -> Void = {}
+    /// мышь (щелчок/наведение) в окне, когда pia не активна — сделать активной (иначе курсор и наведение «видит» приложение позади)
+    var onMouseWhileInactive: (String) -> Void = { _ in }
 
     init() {
         let m = PiaPanel.margin
@@ -36,6 +38,11 @@ final class PiaPanel: NSPanel {
 
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
+
+    override func sendEvent(_ e: NSEvent) {
+        if NSWorkspace.shared.frontmostApplication?.processIdentifier != ProcessInfo.processInfo.processIdentifier, [.leftMouseDown, .rightMouseDown, .otherMouseDown].contains(e.type) { onMouseWhileInactive("щелчок") }
+        super.sendEvent(e)
+    }
     override func cancelOperation(_ sender: Any?) { onCancel() }
 
     /// Видимая карточка в координатах экрана
@@ -145,6 +152,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     // Потеря активности сама по себе окно не прячет (это бывает и из-за внутренних событий) — см. otherAppActivated.
+    func applicationDidResignActive(_ n: Notification) {
+        guard let panel, panel.isVisible, !TestHooks.offscreen else { return }
+        Log.write("pia неактивна при видимом окне (впереди: \(NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "-"), key=\(panel.isKeyWindow))")
+    }
+
+    private var lastMouseActivate = Date.distantPast
+    /// Окно видно, а активно другое приложение (окно — nonactivatingPanel): щелчок или наведение мыши на карточку делает pia
+    /// активной и окно key — иначе форму курсора и наведение обрабатывает приложение позади (браузер подсвечивает строки под pia).
+    private func activateFromMouse(_ how: String) {
+        guard let panel, panel.isVisible, panel.alphaValue > 0.5, !TestHooks.offscreen, !perms.wizardVisible, !isFrontmost else { return }
+        guard Date().timeIntervalSince(lastMouseActivate) > 0.5 else { return }
+        lastMouseActivate = Date()
+        Log.write("мышь (\(how)) в окне, а pia не активна (впереди: \(NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "-")) — активирую")
+        NSApp.activate(ignoringOtherApps: true)
+        panel.makeKeyAndOrderFront(nil)
+    }
+
     func applicationDidBecomeActive(_ n: Notification) {
         if TestHooks.offscreen { return }
         panel?.level = .floating
@@ -262,6 +286,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private func buildPanel() {
         panel = PiaPanel()
         panel.delegate = self
+        panel.onMouseWhileInactive = { [weak self] how in self?.activateFromMouse(how) }
         panel.onCancel = { [weak self] in
             guard let self else { return }
             if self.perms.wizardVisible { self.closePermissions() } else { self.hide(reason: "Esc") }
@@ -271,7 +296,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         host.sizingOptions = []
 
         let m = PiaPanel.margin
-        let container = LinkTrackingView()
+        let container = PiaContainerView()
+        container.onHover = { [weak self] in self?.panel.onMouseWhileInactive("наведение") }
         let shadow = PiaShadowView()
         let bg = PiaBackgroundView()
         PiaDrop.model = model
@@ -329,8 +355,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             let gen = hideGen
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
                 guard let self, gen == self.hideGen, self.panel.isVisible else { return }
-                if !NSApp.isActive || !self.panel.isKeyWindow { self.focusPanel() }
-                Log.write("окно: key=\(self.panel.isKeyWindow), pia активна=\(NSApp.isActive)")
+                if !self.isFrontmost || !self.panel.isKeyWindow { self.focusPanel() }
+                Log.write("окно: key=\(self.panel.isKeyWindow), pia впереди=\(self.isFrontmost)")
             }
         }
         if !wasVisible {
@@ -346,10 +372,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
     }
 
+    /// pia по-настоящему впереди (frontmostApplication). NSApp.isActive тут не годится: при nonactivatingPanel он бывает true,
+    /// хотя впереди осталось другое приложение — тогда курсор и наведение мыши обслуживает оно (браузер подсвечивает строки под pia).
+    private var isFrontmost: Bool { NSWorkspace.shared.frontmostApplication?.processIdentifier == ownPid }
+
     /// Окно впереди, key, курсор в поле ввода; приложение — активное.
     private func focusPanel() {
-        NSApp.activate()
-        if !NSApp.isActive { NSRunningApplication.current.activate(options: [.activateAllWindows]) }
+        // Из фона (двойной Shift/Option — глобальный монитор) кооперативный NSApp.activate() macOS не выполняет:
+        // окно становится key, но впереди остаётся прежнее приложение. activate(ignoringOtherApps:) делает pia frontmost.
+        if !isFrontmost { NSApp.activate(ignoringOtherApps: true) }
         panel.orderFrontRegardless()
         panel.makeKeyAndOrderFront(nil)
         if perms.wizardVisible { panel.makeFirstResponder(nil); return }
@@ -446,6 +477,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 }
 
 // Непрозрачный фон карточки: светлая тема — белый, тёмная — тёмно-серый; волосяная рамка, скруглённые углы.
+/// Контейнер окна: наведение на карточку, когда pia не активна (tracking area .activeAlways — события идут и в неактивное окно)
+final class PiaContainerView: LinkTrackingView {
+    var onHover: () -> Void = {}
+    override func mouseMoved(with e: NSEvent) { check(); super.mouseMoved(with: e) }
+    override func mouseEntered(with e: NSEvent) { check() }
+    private func check() {
+        guard NSWorkspace.shared.frontmostApplication?.processIdentifier != ProcessInfo.processInfo.processIdentifier,
+              NSEvent.pressedMouseButtons == 0, let w = window as? PiaPanel, w.cardFrame.contains(NSEvent.mouseLocation) else { return }
+        onHover()
+    }
+}
+
 final class PiaBackgroundView: NSView {
     static let radius: CGFloat = 16
     static func fill(dark: Bool) -> NSColor { dark ? NSColor(srgbRed: 0.106, green: 0.106, blue: 0.11, alpha: 1) : .white }
