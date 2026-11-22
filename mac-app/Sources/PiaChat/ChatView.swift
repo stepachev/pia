@@ -404,7 +404,7 @@ struct ReportBlock: View {
 
 struct TypingDots: View {
     var body: some View {
-        HexDotsLoader()
+        Dots3x3Loader()
             .padding(.vertical, 6)
             .frame(maxWidth: .infinity, alignment: .leading)
     }
