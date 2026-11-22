@@ -19,7 +19,7 @@
 	<key>NSSupportsAutomaticTermination</key><false/>
 	<key>NSAppleEventsUsageDescription</key><string>pia берёт адрес и название открытой вкладки браузера, чтобы приложить их к сообщению (по двойному нажатию правого Shift).</string>
 	<key>NSScreenCaptureUsageDescription</key><string>pia делает снимок активного окна, чтобы приложить его к сообщению (по двойному нажатию правого Shift).</string>
-	<key>NSAccessibilityUsageDescription</key><string>pia ловит двойное нажатие правого Shift и читает выделенный текст активного окна.</string>
+	<key>NSAccessibilityUsageDescription</key><string>pia открывается двойным нажатием правого Option, по двойному правому Shift прикладывает к сообщению выделенный текст и текст активного окна.</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>

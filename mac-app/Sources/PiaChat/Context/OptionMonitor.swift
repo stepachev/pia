@@ -6,7 +6,8 @@ import ApplicationServices
 /// два коротких нажатия (≤ 300 мс), пауза ≤ 350 мс, между ними нет других клавиш и модификаторов;
 /// левый Option (58) сбрасывает жест; удержание Option с набором символа (⌥+клавиша) не срабатывает.
 /// Настройка: UserDefaults `pia.optionHotkey` (по умолчанию включено). Права — «Универсальный доступ»;
-/// без них монитор просто молчит, приложение работает как раньше (системный запрос — один раз).
+/// без них монитор просто молчит, приложение работает как раньше. Сам ничего не запрашивает — разрешение
+/// выдаётся в мастере «Разрешения»; как только оно появится, монитор подключится сам (проверка раз в 2 с).
 final class RightOptionDoubleTapMonitor: @unchecked Sendable {
     static let defaultsKey = "pia.optionHotkey"
     static var isEnabled: Bool {
@@ -34,7 +35,7 @@ final class RightOptionDoubleTapMonitor: @unchecked Sendable {
     func start() {
         guard Thread.isMainThread else { DispatchQueue.main.async { self.start() }; return }
         guard !isRunning else { return }
-        let trusted = RightShiftDoubleTapMonitor.requestPermissionsIfNeeded()
+        let trusted = AXIsProcessTrusted()
         install(trusted: trusted)
         if !trusted {
             let t = Timer(timeInterval: 2, repeats: true) { [weak self] t in

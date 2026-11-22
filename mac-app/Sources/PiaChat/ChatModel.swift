@@ -36,6 +36,11 @@ final class ChatModel {
     @ObservationIgnored private var pollGen = 0          // номер запуска опроса
     @ObservationIgnored private var appliedGen = 0       // самый новый опрос, чей busy уже применён (старые ответы его не затирают)
     @ObservationIgnored weak var inputView: NSTextView?
+    /// Открыть / закрыть мастер разрешений (задаёт AppDelegate)
+    @ObservationIgnored var onOpenPermissions: () -> Void = {}
+    @ObservationIgnored var onClosePermissions: () -> Void = {}
+    /// Команды в поле ввода, открывающие мастер разрешений (не уходят в службу)
+    static let permissionCommands: Set<String> = ["/разрешения", "/доступы", "/permissions"]
 
     static let imagesDir = NSHomeDirectory() + "/.pi-agent/pia/mac-images"
 
@@ -171,6 +176,11 @@ final class ChatModel {
     func send() {
         guard canSend else { return }
         let userText = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        if attachments.isEmpty, Self.permissionCommands.contains(userText.lowercased()) {
+            draft = ""
+            onOpenPermissions()
+            return
+        }
         let atts = attachments
         var images: [String] = []
         var parts: [String] = []

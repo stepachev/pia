@@ -56,6 +56,7 @@ final class PiaPanel: NSPanel {
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     let model = ChatModel()
+    let perms = Permissions.shared
     var panel: PiaPanel!
     var shiftMonitor: RightShiftDoubleTapMonitor?
     var optionMonitor: RightOptionDoubleTapMonitor?
@@ -85,11 +86,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         buildPanel()
         launched = true
 
+        // разрешения при запуске НЕ запрашиваются: без них мониторы ждут и подключатся сами; выдача — в мастере «Разрешения»
         shiftMonitor = RightShiftDoubleTapMonitor { [weak self] in
             DispatchQueue.main.async { self?.captureAndShow() }
         }
         shiftMonitor?.start()
-        Log.write("двойной правый Shift: монитор запущен (Универсальный доступ: \(RightShiftDoubleTapMonitor.hasAccessibility ? "есть" : "нет"), Мониторинг ввода: \(RightShiftDoubleTapMonitor.hasInputMonitoring ? "есть" : "нет"))")
+        Log.write("двойной правый Shift: монитор запущен (Универсальный доступ: \(RightShiftDoubleTapMonitor.hasAccessibility ? "есть" : "нет"), Мониторинг ввода: \(RightShiftDoubleTapMonitor.hasInputMonitoring ? "есть" : "нет") — не требуется)")
+        perms.refresh()
+        Log.write("разрешения: \(perms.summary())")
+        perms.onGranted = { [weak self] kind in self?.permissionGranted(kind) }
+        model.onOpenPermissions = { [weak self] in self?.openPermissions(source: "команда в поле ввода") }
+        model.onClosePermissions = { [weak self] in self?.closePermissions() }
 
         optionMonitor = RightOptionDoubleTapMonitor { [weak self] in
             DispatchQueue.main.async { self?.toggleByOption() }
@@ -109,7 +116,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
 
         let urls = pendingURLs; pendingURLs = []
-        if !CommandLine.arguments.contains("--hidden") && urls.isEmpty { show(source: "запуск") }
+        if UserDefaults.standard.bool(forKey: Permissions.reopenKey) {
+            // перезапуск кнопкой «Перезапустить pia» в мастере — сразу вернуть мастер
+            UserDefaults.standard.removeObject(forKey: Permissions.reopenKey)
+            openPermissions(source: "перезапуск из мастера")
+        } else if !CommandLine.arguments.contains("--hidden") && urls.isEmpty { show(source: "запуск") }
         for u in urls { perform(url: u) }
         TestHooks.run(self)
         // при скрытом окне держим ленту свежей, но редко
@@ -140,6 +151,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     private func otherAppActivated(pid: pid_t, bundleId: String) {
         guard let panel, panel.isVisible, !TestHooks.offscreen, pid != ownPid, bundleId != Bundle.main.bundleIdentifier else { return }
+        if perms.wizardVisible {
+            // мастер разрешений: пользователь ушёл в Системные настройки / системный запрос — окно не прячем,
+            // только опускаем под них (иначе плавающее окно закроет настройки); вернётся — снова поверх
+            panel.level = .normal
+            Log.write("мастер разрешений: фокус в \(bundleId) — окно остаётся (под ним)")
+            return
+        }
         if PiaDrop.recentlyDragging || bundleId.hasPrefix("pl.maketheweb") {
             Log.write("фокус ушёл в \(bundleId) во время перетаскивания/CleanShot — не прячу")
             return
@@ -156,7 +174,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     /// Окно не активирующее (nonactivatingPanel): если pia так и не стала активной, а пользователь щёлкнул в окно
     /// уже активного приложения, didActivateApplication не приходит — ловим по потере key.
     private func panelResignedKey() {
-        guard !TestHooks.offscreen else { return }
+        guard !TestHooks.offscreen, !perms.wizardVisible else { return }
         if PiaDrop.recentlyDragging { Log.write("потеря key во время перетаскивания — не прячу"); return }
         let gen = hideGen
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
@@ -187,6 +205,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         case "hide": hide(reason: "pia://hide")
         case "option-on": setOptionHotkey(true)
         case "option-off": setOptionHotkey(false)
+        case "permissions", "permission", "access": openPermissions(source: "pia://\(cmd)")
         case "toggle": isFocused ? hide(reason: "pia://toggle") : show(source: "pia://toggle")
         default: show(source: "pia://\(cmd)")
         }
@@ -206,6 +225,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     @objc func toggleOptionHotkey() { setOptionHotkey(!RightOptionDoubleTapMonitor.isEnabled) }
 
+    // MARK: разрешения
+
+    /// Показать мастер разрешений (⌘, , «/разрешения», pia://permissions, перезапуск из мастера).
+    func openPermissions(source: String) {
+        Log.write("мастер разрешений: открыт (\(source)); \(perms.summary())")
+        perms.wizardVisible = true
+        show(source: source)
+        panel.makeFirstResponder(nil)   // набор не уходит в спрятанное под мастером поле ввода
+    }
+
+    /// «Готово» / «Позже» / Esc: закрыть мастер, сам он больше не откроется.
+    func closePermissions() {
+        guard perms.wizardVisible else { return }
+        perms.wizardVisible = false
+        UserDefaults.standard.set(true, forKey: Permissions.dismissedKey)
+        panel.level = .floating
+        Log.write("мастер разрешений: закрыт; \(perms.summary())")
+        if let tv = model.inputView { panel.makeFirstResponder(tv) }
+    }
+
+    @objc func permissionsAction() { openPermissions(source: "⌘,") }
+
+    /// Разрешение только что появилось: если мастер открыт — вывести окно вперёд (видна галочка).
+    /// «Запись экрана» — не выводим: Системные настройки сами предлагают «Завершить и открыть снова», окно бы его закрыло.
+    private func permissionGranted(_ kind: Permissions.Kind) {
+        guard perms.wizardVisible, panel.isVisible, kind != .screen else { return }
+        show(source: "разрешение выдано: \(kind.rawValue)")
+    }
+
     private var isFocused: Bool { panel.isVisible && (panel.isKeyWindow || NSApp.isActive) }
 
     // MARK: окно
@@ -213,7 +261,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private func buildPanel() {
         panel = PiaPanel()
         panel.delegate = self
-        panel.onCancel = { [weak self] in self?.hide(reason: "Esc") }
+        panel.onCancel = { [weak self] in
+            guard let self else { return }
+            if self.perms.wizardVisible { self.closePermissions() } else { self.hide(reason: "Esc") }
+        }
         let root = ChatView(model: model, onEscape: { [weak self] in self?.hide(reason: "Esc") })
         let host = NSHostingView(rootView: root)
         host.sizingOptions = []
@@ -277,6 +328,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             panel.alphaValue = 0
         }
         shownAt = Date()
+        perms.startWatching()
+        if perms.shouldAutoShow && !perms.wizardVisible {
+            perms.wizardVisible = true   // первый запуск без главного разрешения — сначала мастер
+            Log.write("мастер разрешений: открыт сам (первый запуск); \(perms.summary())")
+        }
         Log.write("показ (\(source)), было видно: \(wasVisible), впереди: \(NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "-")")
         panel.level = .floating
         if TestHooks.offscreen {
@@ -316,6 +372,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if !NSApp.isActive { NSRunningApplication.current.activate(options: [.activateAllWindows]) }
         panel.orderFrontRegardless()
         panel.makeKeyAndOrderFront(nil)
+        if perms.wizardVisible { panel.makeFirstResponder(nil); return }
         if let tv = model.inputView, panel.firstResponder !== tv { panel.makeFirstResponder(tv) }
     }
 
@@ -325,6 +382,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         hideGen += 1
         let gen = hideGen
         model.stopPolling()
+        perms.stopWatching()
         if let a = activity { ProcessInfo.processInfo.endActivity(a); activity = nil }
         NSAnimationContext.runAnimationGroup({ ctx in
             ctx.duration = 0.1
@@ -377,6 +435,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         oi.target = self
         oi.state = RightOptionDoubleTapMonitor.isEnabled ? .on : .off
         optionItem = oi
+        appMenu.addItem(withTitle: "Разрешения…", action: #selector(permissionsAction), keyEquivalent: ",").target = self
         appMenu.addItem(withTitle: "Выйти из pia", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         appItem.submenu = appMenu
         main.addItem(appItem)

@@ -231,13 +231,11 @@ else
   echo "      (откроется браузер; потом запусти pia). Другой провайдер: pia-login openai — см. README"
 fi
 if [ "$ALREADY" = 0 ]; then
-  echo "  Включи для pia в Системные настройки → Конфиденциальность и безопасность:"
-  echo "      Универсальный доступ, Мониторинг ввода, Запись экрана"
-  if [ "$DRY" = 0 ]; then
-    open "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility" 2>/dev/null
-    [ "$NEEDLOGIN" = 1 ] && open "pia://show" 2>/dev/null
-  fi
-  echo "  Окно pia: двойной правый Shift (или open pia://show)."
+  # разрешения macOS выдаются в самом окне pia: мастер «Разрешения» — по одному, с пояснением, зачем каждое
+  echo "  Откройте pia — она сама проведёт по разрешениям macOS (по одному, с пояснениями)."
+  echo "      Открыть: Spotlight (⌘ Пробел) → pia, или команда: open -a pia"
+  echo "      Мастер потом снова: команда /разрешения в окне pia или open pia://permissions"
+  [ "$DRY" = 0 ] && [ -d "$APP" ] && open "pia://show" 2>/dev/null
 else
   echo "  Обновить: ./install.sh --update    Удалить: ./uninstall.sh"
 fi

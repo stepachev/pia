@@ -10,10 +10,6 @@ enum ContextScreenshot {
     /// Есть ли право «Запись экрана» (без запроса).
     static var hasScreenRecording: Bool { CGPreflightScreenCaptureAccess() }
 
-    /// Показать системный запрос «Запись экрана» (macOS покажет его один раз).
-    @discardableResult
-    static func requestScreenRecording() -> Bool { CGRequestScreenCaptureAccess() }
-
     /// Окна приложения на экране, спереди назад (обычный слой 0).
     static func frontWindows(pid: pid_t) -> [(id: CGWindowID, title: String?)] {
         guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)

@@ -10,9 +10,9 @@ import CoreGraphics
 ///
 /// Мониторы: flagsChanged (Shift и прочие модификаторы) и keyDown (набор между/во время нажатий
 /// сбрасывает жест, например заглавная буква правым Shift). Глобальный монитор клавиатурных событий
-/// (и keyDown, и flagsChanged) работает с правом «Универсальный доступ»; «Мониторинг ввода» на новых
-/// macOS тоже запрашивается. Если прав ещё нет, start() один раз показывает системный запрос
-/// и сам подключит монитор, как только права появятся (проверка раз в 2 с).
+/// (и keyDown, и flagsChanged) работает с правом «Универсальный доступ» — «Мониторинг ввода» не нужен.
+/// start() ничего не запрашивает (разрешения выдаются по одному в мастере — Permissions/PermissionsView);
+/// если прав ещё нет, монитор сам подключится, как только они появятся (проверка раз в 2 с).
 ///
 /// Все вызовы — с главного потока (как обычно в AppKit/SwiftUI); с другого потока
 /// start()/stop() сами перейдут на главный.
@@ -32,43 +32,13 @@ final class RightShiftDoubleTapMonitor: @unchecked Sendable {
     // MARK: Права
     /// Есть ли право «Универсальный доступ» (без запроса).
     static var hasAccessibility: Bool { AXIsProcessTrusted() }
-    /// Есть ли право «Мониторинг ввода» (без запроса).
+    /// Есть ли право «Мониторинг ввода» (без запроса; только для журнала — pia его не требует).
     static var hasInputMonitoring: Bool { CGPreflightListenEventAccess() }
     /// Хватает ли прав, чтобы жест ловился во всех приложениях.
     static var hasPermissions: Bool { hasAccessibility }
 
-    /// Показать системный запрос «Универсальный доступ» (и «Мониторинг ввода»).
-    /// По умолчанию — только один раз за всё время (флаг в UserDefaults), чтобы не
-    /// надоедать при каждом запуске. Возвращает, есть ли права сейчас.
-    @discardableResult
-    static func requestPermissionsIfNeeded(force: Bool = false) -> Bool {
-        let key = "pia.context.permissionsPrompted"
-        let trusted = AXIsProcessTrusted()
-        if trusted { return true }
-        if force || !UserDefaults.standard.bool(forKey: key) {
-            UserDefaults.standard.set(true, forKey: key)
-            // Строка ключа kAXTrustedCheckOptionPrompt — без обращения к глобальной
-            // переменной (в Swift 6 она не Sendable).
-            let options = ["AXTrustedCheckOptionPrompt": true] as CFDictionary
-            _ = AXIsProcessTrustedWithOptions(options)
-            if !CGPreflightListenEventAccess() { _ = CGRequestListenEventAccess() }
-        }
-        return AXIsProcessTrusted()
-    }
-
-    /// Открыть нужный раздел Системных настроек.
-    static func openPrivacySettings(_ pane: PrivacyPane = .accessibility) {
-        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(pane.rawValue)") {
-            NSWorkspace.shared.open(url)
-        }
-    }
-
-    enum PrivacyPane: String {
-        case accessibility = "Privacy_Accessibility"
-        case inputMonitoring = "Privacy_ListenEvent"
-        case screenRecording = "Privacy_ScreenCapture"
-        case automation = "Privacy_Automation"
-    }
+    // Запросы разрешений и переход в Системные настройки — только в мастере «Разрешения» (Permissions.swift),
+    // по нажатию пользователя. «Мониторинг ввода» не нужен: глобальным мониторам клавиш хватает «Универсального доступа».
 
     // MARK: Жизненный цикл
     private let onTrigger: () -> Void
@@ -97,7 +67,8 @@ final class RightShiftDoubleTapMonitor: @unchecked Sendable {
             return
         }
         guard globalMonitor == nil, localMonitor == nil else { return }
-        let trusted = Self.requestPermissionsIfNeeded()
+        // без запроса: разрешение выдаётся в мастере «Разрешения»; без него монитор ждёт и подключится сам
+        let trusted = Self.hasAccessibility
         installMonitors(trusted: trusted)
         if !trusted { waitForPermission() }
     }

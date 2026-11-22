@@ -42,7 +42,13 @@ struct ChatView: View {
                 ZoomedImage(path: z) { withAnimation(.easeOut(duration: 0.15)) { model.zoomImage = nil } }
                     .transition(.opacity)
             }
+            // мастер разрешений — поверх чата (чат и черновик живут под ним)
+            if Permissions.shared.wizardVisible {
+                PermissionsView(perms: Permissions.shared) { model.onClosePermissions() }
+                    .transition(.opacity)
+            }
         }
+        .animation(.easeOut(duration: 0.15), value: Permissions.shared.wizardVisible)
         .background(DragArea())
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { windowHeight = $0 }
     }
@@ -165,6 +171,8 @@ struct ChatView: View {
                 StatusLine(text: e)
             } else if !model.helpers.isEmpty {
                 HelpersBar(model: model)
+            } else if !Permissions.shared.accessibility && !Permissions.shared.wizardVisible {
+                PermissionsHintLine { model.onOpenPermissions() }
             }
             if !model.attachments.isEmpty {
                 AttachmentsRow(model: model)
