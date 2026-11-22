@@ -150,23 +150,30 @@ final class PiaTextView: NSTextView {
         tracking = t
     }
 
+    /// Курсор над этим текстом и ничего его не накрывает: лента прокручивается под полосой-хватом и полем ввода,
+    /// там курсор ставит то, что сверху (рука для перетаскивания), а не этот текст.
+    private func isTopmost(_ e: NSEvent) -> Bool {
+        guard let cv = window?.contentView, let fv = cv.superview else { return false }
+        guard let hit = cv.hitTest(fv.convert(e.locationInWindow, from: nil)) else { return false }
+        return hit === self || hit.isDescendant(of: self)
+    }
+
     private func updateCursor(_ e: NSEvent) {
-        guard selectableText else { return }
+        guard selectableText, isTopmost(e) else { return }
         (link(atWindowPoint: e.locationInWindow) != nil ? NSCursor.pointingHand : NSCursor.iBeam).set()
     }
 
-    override func mouseMoved(with e: NSEvent) { super.mouseMoved(with: e); updateCursor(e) }
-    override func mouseEntered(with e: NSEvent) { super.mouseEntered(with: e); updateCursor(e) }
+    override func mouseMoved(with e: NSEvent) { if isTopmost(e) { super.mouseMoved(with: e) }; updateCursor(e) }
+    override func mouseEntered(with e: NSEvent) { updateCursor(e) }
     override func cursorUpdate(with e: NSEvent) { updateCursor(e) }
     override func mouseExited(with e: NSEvent) {
-        super.mouseExited(with: e)
-        if selectableText { NSCursor.arrow.set() }
+        // ушли с текста на пустое место — обычная стрелка (но не поверх руки хвата)
+        guard selectableText, let cv = window?.contentView, let fv = cv.superview else { return }
+        if !(cv.hitTest(fv.convert(e.locationInWindow, from: nil)) is GrabStripView) { NSCursor.arrow.set() }
     }
 
-    override func resetCursorRects() {
-        guard selectableText else { return }
-        super.resetCursorRects()   // TextKit 1: I-beam на весь текст + pointingHand над ссылками (linkTextAttributes .cursor)
-    }
+    // Системные cursor rects NSTextView не знают про накрывающие виды и перебивали руку хвата — курсор ставим сами (updateCursor)
+    override func resetCursorRects() {}
 
     override func hitTest(_ p: NSPoint) -> NSView? { selectableText ? super.hitTest(p) : nil }
     override var acceptsFirstResponder: Bool { selectableText }

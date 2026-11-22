@@ -7,7 +7,8 @@ if args.contains("--unregister") { Autostart.unregisterAll().forEach { print($0)
 if args.contains("--autostart-status") { Autostart.status().forEach { print($0) }; exit(0) }
 
 // Одно окно: если pia уже запущена (вручную или службой), второй экземпляр тихо выходит (код 0 — служба его не перезапускает).
-if let bid = Bundle.main.bundleIdentifier,
+// Проверочный запуск (PIA_TEST_OFFSCREEN с мок-сервером) работает рядом с настоящей pia.
+if ProcessInfo.processInfo.environment["PIA_TEST_OFFSCREEN"] != "1", let bid = Bundle.main.bundleIdentifier,
    NSRunningApplication.runningApplications(withBundleIdentifier: bid).contains(where: { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier }) {
     exit(0)
 }

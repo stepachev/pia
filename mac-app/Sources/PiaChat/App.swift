@@ -3,7 +3,8 @@ import SwiftUI
 
 // Окно pia: borderless — без заголовка и светофора, непрозрачный фон (белый / тёмный, как Raycast AI Chat), перетаскивается за фон, меняет размер.
 // Тень своя (мягкая, как у плавающих окон macOS/Raycast): системная тень активного окна тяжёлая и с тёмным ободком. Поэтому окно
-// шире карточки на `margin` со всех сторон; поля под тенью пропускают щелчки (ignoresMouseEvents), размер меняется за край карточки.
+// шире карточки на `margin` со всех сторон; поля под тенью пропускают мышь (ignoresMouseEvents по опросу, см. updatePassThrough),
+// размер меняется за край карточки, перетаскивание — за верхнюю полосу и пустой фон карточки.
 final class PiaPanel: NSPanel {
     static let margin: CGFloat = 40   // поле под тень: мягкая тень (σ 14 ≈ blur 28) + смещение 11 вниз гаснет до края окна
     var onCancel: () -> Void = {}
@@ -89,7 +90,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         NSScrollView.piaHideScrollers()
         Log.write("запуск pia.app, сервер: \(model.client.configPath)")
         NSApp.setActivationPolicy(.accessory)
-        Autostart.ensureRegistered().forEach { Log.write("автозапуск: \($0)") }   // идемпотентно: служба и окно в «Объектах входа» под pia
+        // проверочная копия (PIA_TEST_OFFSCREEN) службы на себя не регистрирует
+        if !TestHooks.offscreen { Autostart.ensureRegistered().forEach { Log.write("автозапуск: \($0)") } }   // идемпотентно: служба и окно в «Объектах входа» под pia
         buildMenu()
         buildPanel()
         launched = true
@@ -98,7 +100,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         shiftMonitor = RightShiftDoubleTapMonitor { [weak self] in
             DispatchQueue.main.async { self?.captureAndShow() }
         }
-        shiftMonitor?.start()
+        if !TestHooks.offscreen { shiftMonitor?.start() }
         Log.write("двойной правый Shift: монитор запущен (Универсальный доступ: \(RightShiftDoubleTapMonitor.hasAccessibility ? "есть" : "нет"), Мониторинг ввода: \(RightShiftDoubleTapMonitor.hasInputMonitoring ? "есть" : "нет") — не требуется)")
         perms.refresh()
         Log.write("разрешения: \(perms.summary())")
@@ -109,7 +111,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         optionMonitor = RightOptionDoubleTapMonitor { [weak self] in
             DispatchQueue.main.async { self?.toggleByOption() }
         }
-        if RightOptionDoubleTapMonitor.isEnabled { optionMonitor?.start() }
+        if RightOptionDoubleTapMonitor.isEnabled && !TestHooks.offscreen { optionMonitor?.start() }
         Log.write("двойной правый Option: \(RightOptionDoubleTapMonitor.isEnabled ? "включён" : "выключен")")
 
         // Прятать окно — только когда пользователь реально перешёл в другое приложение
@@ -321,8 +323,67 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         panel.contentView = container
         panel.center()
 
-        // окно перехватывает мышь целиком, пока видно: ignoresMouseEvents не трогаем (всегда false)
         panel.ignoresMouseEvents = false
+    }
+
+    // MARK: поле под тенью пропускает мышь
+
+    /// Окно шире карточки на margin (тень). Пока окно видно, раз в 1/30 с сверяем курсор с карточкой: снаружи — мышь
+    /// проходит в окна позади (не таскается и не щёлкается поле под тенью), внутри — окно ловит всё.
+    /// Опрос, а не мониторы событий: прошлая версия на мониторах залипала в «прозрачном» состоянии.
+    private var passTimer: Timer?
+
+    private func startPassThrough() {
+        passTimer?.invalidate()
+        let t = Timer(timeInterval: 1.0 / 30, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.updatePassThrough() }
+        }
+        RunLoop.main.add(t, forMode: .common)   // и во время перетаскивания/изменения размера
+        passTimer = t
+        updatePassThrough()
+    }
+
+    private func stopPassThrough() {
+        passTimer?.invalidate()
+        passTimer = nil
+        panel?.ignoresMouseEvents = false
+    }
+
+    private func updatePassThrough() {
+        guard let panel, panel.isVisible, !TestHooks.offscreen else { return }
+        let inside = panel.cardFrame.insetBy(dx: -1, dy: -1).contains(NSEvent.mouseLocation)
+        let ignore = !inside
+        guard ignore != panel.ignoresMouseEvents else { return }
+        // кнопка зажата (перетаскивание окна, размер, файл в окно) — карточку не отпускаем, но поймать можно всегда
+        if ignore && NSEvent.pressedMouseButtons != 0 { return }
+        panel.ignoresMouseEvents = ignore
+    }
+
+    // MARK: место окна
+
+    /// Окно двинули (перетаскивание, размер за верх/лево) — запомнить, где стоит карточка
+    func windowDidMove(_ n: Notification) {
+        guard let panel, panel.isVisible, !TestHooks.offscreen else { return }
+        let o = panel.cardFrame.origin
+        UserDefaults.standard.set(o.x, forKey: "pia.window.x")
+        UserDefaults.standard.set(o.y, forKey: "pia.window.y")
+    }
+
+    /// Поставить окно туда, где оно было; если того места больше нет на экранах — по центру экрана с курсором
+    private func placePanel() {
+        let d = UserDefaults.standard
+        guard d.object(forKey: "pia.window.x") != nil else { centerOnActiveScreen(); return }
+        let m = PiaPanel.margin
+        let card = NSRect(x: d.double(forKey: "pia.window.x"), y: d.double(forKey: "pia.window.y"),
+                          width: panel.frame.width - 2 * m, height: panel.frame.height - 2 * m)
+        // хотя бы верхняя полоса (за неё таскают) должна быть видна на каком-то экране
+        let grip = NSRect(x: card.minX, y: card.maxY - ChatView.dragStrip, width: card.width, height: ChatView.dragStrip)
+        let ok = NSScreen.screens.contains { s in
+            let i = s.visibleFrame.intersection(grip)
+            return !i.isNull && i.width >= min(120, card.width) && i.height >= ChatView.dragStrip - 1
+        }
+        guard ok else { centerOnActiveScreen(); return }
+        panel.setFrameOrigin(NSPoint(x: card.minX - m, y: card.minY - m))
     }
 
     func show(source: String = "") {
@@ -330,10 +391,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         hideGen += 1                         // отменяет незавершённое скрытие
         let wasVisible = panel.isVisible && panel.alphaValue > 0.99
         if !panel.isVisible {
-            centerOnActiveScreen()
+            placePanel()
             panel.alphaValue = 0
         }
         panel.ignoresMouseEvents = false
+        startPassThrough()
         shownAt = Date()
         perms.startWatching()
         if perms.shouldAutoShow && !perms.wizardVisible {
@@ -394,6 +456,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let gen = hideGen
         model.stopPolling()
         perms.stopWatching()
+        stopPassThrough()
         if let a = activity { ProcessInfo.processInfo.endActivity(a); activity = nil }
         NSAnimationContext.runAnimationGroup({ ctx in
             ctx.duration = 0.1
