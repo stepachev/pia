@@ -145,15 +145,15 @@ WRAP
   fi
 fi
 # вход к провайдеру без отдельной программы pi: тот же ~/.pi/agent/auth.json
-if [ ! -x "$BIN/pia-login" ]; then
+# pia-login = то же меню выбора провайдера, что и `pia login` (agent.mjs → login.mjs)
+if [ ! -x "$BIN/pia-login" ] || ! grep -q 'agent.mjs' "$BIN/pia-login"; then
   if [ "$DRY" = 1 ]; then todo "создал бы $BIN/pia-login"; else
     cat > "$BIN/pia-login" <<'WRAP'
 #!/bin/sh
-# Вход к провайдеру модели (по умолчанию anthropic); пишет ~/.pi/agent/auth.json
-mkdir -p "$HOME/.pi/agent" && cd "$HOME/.pi/agent" || exit 1
-exec "$HOME/.local/share/pi-node/current/bin/node" "$HOME/.pi-agent/node_modules/@earendil-works/pi-ai/dist/cli.js" login "${1:-anthropic}"
+export NODE_NO_WARNINGS=1
+exec "$HOME/.local/share/pi-node/current/bin/node" "$HOME/.pi-agent/agent.mjs" login "$@"
 WRAP
-    chmod +x "$BIN/pia-login"; ok "создан $BIN/pia-login (вход к провайдеру)"
+    chmod +x "$BIN/pia-login"; ok "создан $BIN/pia-login (открывает выбор провайдера)"
   fi
 fi
 if grep -qs '\.local/bin' "$HOME/.zshrc"; then ok "~/.local/bin уже в PATH (.zshrc)"; else
