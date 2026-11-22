@@ -301,6 +301,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             NSEvent.addGlobalMonitorForEvents(matching: mask) { [weak self] _ in MainActor.assumeIsolated { self?.updateMousePassThrough() } } as Any,
             NSEvent.addLocalMonitorForEvents(matching: mask) { [weak self] e in self?.updateMousePassThrough(); return e } as Any,
         ]
+        LinkCursor.install { [weak self] in self?.panel?.contentView }
     }
 
     private var mouseMonitors: [Any] = []
