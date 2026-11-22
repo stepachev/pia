@@ -563,9 +563,31 @@ export function helperListRows(helpers, cols) {
 }
 
 // ── Сообщение пользователя: «┃ » + жирный, перенос по словам ──
+// Захваченный контекст <context source="…">…</context> → одна серая строка (модели уходит полный текст)
+const CTX_RE = /<context\b([^>]*)>([\s\S]*?)<\/context>/g;
+export function foldContext(raw) {
+  const ctx = [];
+  let hasImg = false;
+  const text = safeText(raw).replace(CTX_RE, (m, attrs, body) => {
+    const src = /source="([^"]*)"/.exec(attrs)?.[1];
+    const line = /^\s*Контекст:[^\n]*/m.exec(body)?.[0]?.trim();
+    let label = line ? line.replace(/\s+—\s+https?:\/\/\S+\s*$/, "") : src ? `Контекст: ${src}` : "Контекст";
+    if (/\.(png|jpe?g|webp|heic)\b|\[картинка \d+\]/i.test(body)) label += " · снимок";
+    ctx.push(label); return "\u0000CTX" + (ctx.length - 1) + "\u0000";
+  });
+  if (!ctx.length) return { text, ctx, hasImg };
+  const clean = text.split("\n").filter((l) => !/^\s*\[(?:картинка \d+\][^\n]*(?:context-|\.png|\.jpe?g)[^\n]*|снимок убран из контекста:[^\]]*\])\s*$/.test(l)).join("\n").replace(/\n{3,}/g, "\n\n");
+  return { text: clean, ctx, hasImg: true };
+}
+export const isCtxNote = (n) => /context-[^\s]*\.(png|jpe?g|webp)/i.test(n) || /^\[снимок убран/.test(n);
+
+// ── Сообщение пользователя: «┃ » + жирный, перенос по словам ──
 export function userCardRows(raw, cols) {
   const rail = [{ g: "┃", w: 1, st: { fg: C.rail } }, SP()];
-  return safeText(raw).split("\n").flatMap((l) => {
+  const f = foldContext(raw);
+  return f.text.split("\n").flatMap((l) => {
+    const mk = /^\u0000CTX(\d+)\u0000$/.exec(l.trim());
+    if (mk) return [dimS("  " + clipDots(f.ctx[+mk[1]], cols - 2))];
     if (!l.trim()) return [emit(rail)];
     const ind = Math.min(/^ */.exec(l)[0].length, Math.floor(cols / 3));   // отступы (код, JSON) сохраняем
     const pre = [...rail, ...spaces(ind)];

@@ -3,7 +3,7 @@
 // общий разговор, что и Raycast. Закрыть окно (Ctrl+D) — работа продолжается в фоне.
 import fs from "node:fs";
 import readline from "node:readline";
-import { LiveArea, MdStream, clipEnd, detectTheme, footerRows, userCardRows } from "./render.mjs";
+import { LiveArea, MdStream, clipEnd, detectTheme, footerRows, userCardRows, foldContext, isCtxNote } from "./render.mjs";
 import { Editor } from "./input.mjs";
 import { clipboardImage, stashImage } from "./attachments.mjs";
 import { APP } from "./shared.mjs";
@@ -111,7 +111,7 @@ const renderedKeys = new Set();   // ответы, уже напечатанны
 let lastSeq = 0;         // последний полученный номер записи — для переподключения
 
 function block(rows) { if (printed) commitQ.push(""); commitQ.push(...rows); printed = true; }
-const cardRows = (it) => [...userCardRows(it.card ?? it.text, cols()), ...(it.notes ?? []).map((n) => dim("  " + clipEnd(n, cols() - 2)))];
+const cardRows = (it) => [...userCardRows(it.card ?? it.text, cols()), ...(it.notes ?? []).filter((n) => !(foldContext(it.card ?? it.text).ctx.length && isCtxNote(n))).map((n) => dim("  " + clipEnd(n, cols() - 2)))];
 const showCards = () => { for (const rows of cards) block(rows); cards = []; };
 const newCur = (key, target = "", done = false) => ({ key, target, base: 0, shownLen: 0, msg: null, done });
 // Допечатать текущий ответ целиком и закрыть его
@@ -176,7 +176,7 @@ function onItem(it, instant = false) {
   } else if (it.role === "report") {
     finishCur(); block([dim(clipEnd(`помощник #${it.n ?? "?"} закончил: ${it.title ?? ""}`, cols()))]);
   } else if (it.role === "assistant") {
-    if (it.service) { finishCur(); block([it.text]); return; }
+    if (it.service) { finishCur(); block([dim(clipEnd(String(it.text).split("\n")[0], cols()))]); return; }
     if (it.stream && cur?.key === it.stream) {
       if (it.text.startsWith(cur.target.trimEnd())) cur.target = it.text;
       else { finishCur(); renderedKeys.delete(it.stream); cur = newCur(it.stream, it.text); }
@@ -210,7 +210,7 @@ function onEvent(ev) {
   } else if (ev.type === "item") onItem(ev.item);
   else if (ev.type === "live") onLive(ev.live);
   else if (ev.type === "helpers") helpers = ev.helpers;
-  else if (ev.type === "notice") { finishCur(); block([dim(ev.text)]); }
+  else if (ev.type === "notice") { finishCur(); block([dim(clipEnd(String(ev.text).split("\n")[0], cols()))]); }
   else return;
   draw();
 }
