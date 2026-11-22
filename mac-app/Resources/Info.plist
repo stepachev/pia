@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key><string>ru</string>
+	<key>CFBundleExecutable</key><string>PiaChat</string>
+	<key>CFBundleIdentifier</key><string>com.pi-agent.chat</string>
+	<key>CFBundleName</key><string>pia</string>
+	<key>CFBundleDisplayName</key><string>pia</string>
+	<key>CFBundleIconFile</key><string>AppIcon</string>
+	<key>CFBundlePackageType</key><string>APPL</string>
+	<key>CFBundleShortVersionString</key><string>1.0</string>
+	<key>CFBundleVersion</key><string>1</string>
+	<key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+	<key>LSMinimumSystemVersion</key><string>26.0</string>
+	<key>LSUIElement</key><true/>
+	<key>LSApplicationCategoryType</key><string>public.app-category.productivity</string>
+	<key>NSHighResolutionCapable</key><true/>
+	<key>NSSupportsAutomaticTermination</key><false/>
+	<key>NSAppleEventsUsageDescription</key><string>pia берёт адрес и название открытой вкладки браузера, чтобы приложить их к сообщению (по двойному нажатию правого Shift).</string>
+	<key>NSScreenCaptureUsageDescription</key><string>pia делает снимок активного окна, чтобы приложить его к сообщению (по двойному нажатию правого Shift).</string>
+	<key>NSAccessibilityUsageDescription</key><string>pia ловит двойное нажатие правого Shift и читает выделенный текст активного окна.</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key><string>com.pi-agent.chat</string>
+			<key>CFBundleURLSchemes</key><array><string>pia</string></array>
+		</dict>
+	</array>
+</dict>
+</plist>

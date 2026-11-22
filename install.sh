@@ -1,0 +1,245 @@
+#!/bin/bash
+# Установщик pia (macOS). Идемпотентный: повторный запуск ставит только недостающее.
+#   ./install.sh            — установить (если уже стоит — только сообщит)
+#   ./install.sh --check    — ничего не менять, показать, что было бы сделано
+#   ./install.sh --update   — обновить код (git pull), зависимости и пересобрать окно (службу не перезапускает)
+#   ./install.sh --render ПАПКА — только сгенерировать plist из шаблонов в ПАПКУ
+set -u
+ROOT="$(cd "$(dirname "$0")" && pwd)"
+UID_=$(id -u)
+DRY=0; UPDATE=0; RENDER=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --check|--dry-run) DRY=1 ;;
+    --update) UPDATE=1 ;;
+    --render) RENDER="${2:-}"; shift ;;
+    -h|--help) sed -n 2,7p "$0"; exit 0 ;;
+    *) echo "неизвестный параметр: $1"; exit 2 ;;
+  esac
+  shift
+done
+
+ok()   { printf '  ✓ %s\n' "$*"; }
+todo() { printf '  → %s\n' "$*"; }
+warn() { printf '  ⚠ %s\n' "$*"; }
+step() { printf '\n%s\n' "$*"; }
+die()  { printf '  ✗ %s\n' "$*"; exit 1; }
+# do: в режиме --check только сообщает; иначе выполняет
+do_() { if [ "$DRY" = 1 ]; then todo "(проверка) было бы: $*"; return 0; fi; "$@"; }
+
+render_plists() {  # $1 — папка назначения
+  mkdir -p "$1"
+  for n in server memory chat; do
+    sed "s|__HOME__|$HOME|g" "$ROOT/launchd/com.pi-agent.$n.plist.template" > "$1/com.pi-agent.$n.plist" || return 1
+  done
+}
+if [ -n "$RENDER" ]; then render_plists "$RENDER" && echo "plist сгенерированы в $RENDER"; exit $?; fi
+
+LAB="$HOME/Library/LaunchAgents"
+NODE_DIR="$HOME/.local/share/pi-node"
+NODE="$NODE_DIR/current/bin/node"
+BIN="$HOME/.local/bin"
+APP="$HOME/Applications/pia.app"
+loaded() { launchctl print "gui/$UID_/$1" >/dev/null 2>&1; }
+
+echo "pia — установка"
+[ "$DRY" = 1 ] && echo "(режим проверки: ничего не меняется)"
+
+# ── 1. система ──
+step "1. Система"
+[ "$(uname -s)" = Darwin ] || die "нужен macOS"
+MACV=$(sw_vers -productVersion); MAJOR=${MACV%%.*}
+[ "$MAJOR" -ge 13 ] 2>/dev/null || die "macOS $MACV слишком старая (нужна 13+)"
+ARCH=$(uname -m)
+ok "macOS $MACV, $ARCH"
+[ "$ROOT" = "$HOME/.pi-agent" ] || die "репозиторий должен лежать в ~/.pi-agent (сейчас $ROOT). Выполни: git clone https://github.com/stepachev/pia ~/.pi-agent"
+
+if ! xcode-select -p >/dev/null 2>&1 || ! xcrun --find swift >/dev/null 2>&1; then
+  if [ "$DRY" = 1 ]; then todo "нет Command Line Tools — запустил бы xcode-select --install"; else
+    xcode-select --install 2>/dev/null
+    echo "  ⏳ Открылось окно установки Command Line Tools. Дождись окончания установки и запусти ./install.sh снова."
+    exit 1
+  fi
+else
+  ok "Command Line Tools установлены"
+fi
+SDKOK=0
+for c in /Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk /Library/Developer/CommandLineTools/SDKs/MacOSX26.sdk \
+         /Library/Developer/CommandLineTools/SDKs/MacOSX26.*.sdk /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk; do
+  [ -d "$c" ] && { SDKOK=1; ok "SDK для окна: ${c##*/}"; break; }
+done
+[ "$SDKOK" = 1 ] || warn "нет SDK MacOSX 26.x (в SDK 27 сборка окна падает на @State). Терминальный pia заработает, окно — после установки Xcode или CLT с SDK 26"
+
+# ── уже установлено? ──
+if [ "$UPDATE" = 0 ] && [ -f "$ROOT/node_modules/.package-lock.json" ] && [ -x "$NODE" ] && [ -x "$BIN/pia" ] \
+   && loaded com.pi-agent.server && [ -d "$APP" ] && loaded com.pi-agent.chat; then
+  step "pia уже установлено"
+  ok "служба com.pi-agent.server и окно com.pi-agent.chat работают"
+  ALREADY=1
+else
+  ALREADY=0
+fi
+
+if [ "$ALREADY" = 0 ]; then
+# ── 2. Node ──
+step "2. Node.js"
+if [ -x "$NODE" ]; then
+  ok "есть: $("$NODE" -v)"
+else
+  MAJ=${PIA_NODE_MAJOR:-22}
+  case "$ARCH" in arm64) NA=arm64 ;; x86_64) NA=x64 ;; *) die "неизвестная архитектура $ARCH" ;; esac
+  if [ "$DRY" = 1 ]; then todo "скачал бы официальный Node $MAJ LTS ($NA) с nodejs.org в $NODE_DIR"; else
+    BASE="https://nodejs.org/dist/latest-v$MAJ.x"
+    SUMS=$(curl -fsSL --max-time 60 "$BASE/SHASUMS256.txt") || die "не удалось получить $BASE/SHASUMS256.txt (нет интернета?)"
+    LINE=$(printf '%s\n' "$SUMS" | grep "darwin-$NA.tar.gz" | head -1)
+    FILE=${LINE##* }; SUM=${LINE%% *}; NAME=${FILE%.tar.gz}
+    [ -n "$FILE" ] || die "не нашёл сборку Node для darwin-$NA"
+    TMP=$(mktemp -d)
+    curl -fsSL --max-time 900 -o "$TMP/$FILE" "$BASE/$FILE" || die "не удалось скачать $FILE"
+    [ "$(shasum -a 256 "$TMP/$FILE" | awk '{print $1}')" = "$SUM" ] || die "контрольная сумма $FILE не совпала"
+    mkdir -p "$NODE_DIR"
+    tar -xzf "$TMP/$FILE" -C "$NODE_DIR" || die "не распаковался $FILE"
+    rm -rf "$TMP"
+    ln -sfn "$NODE_DIR/$NAME" "$NODE_DIR/current"
+    ok "Node установлен: $("$NODE" -v)"
+  fi
+fi
+mkdir -p "$BIN"
+for t in node npm npx; do
+  [ -e "$BIN/$t" ] || { [ "$DRY" = 1 ] && todo "ссылка $BIN/$t" || ln -s "$NODE_DIR/current/bin/$t" "$BIN/$t"; }
+done
+
+# ── 3. зависимости ──
+step "3. Зависимости (npm)"
+export PATH="$NODE_DIR/current/bin:$PATH"
+if [ "$UPDATE" = 1 ]; then
+  if [ -d "$ROOT/.git" ]; then do_ git -C "$ROOT" pull --ff-only && ok "код обновлён"; fi
+fi
+if [ -f "$ROOT/node_modules/.package-lock.json" ] && [ "$UPDATE" = 0 ]; then
+  ok "node_modules на месте"
+else
+  if [ "$DRY" = 1 ]; then todo "npm ci в ~/.pi-agent"; else
+    if [ -f "$ROOT/package-lock.json" ]; then (cd "$ROOT" && timeout 900 npm ci --no-audit --no-fund >/dev/null 2>&1) || (cd "$ROOT" && timeout 900 npm install --no-audit --no-fund >/dev/null 2>&1) || die "npm не справился (см. npm install в ~/.pi-agent)"
+    else (cd "$ROOT" && timeout 900 npm install --no-audit --no-fund >/dev/null 2>&1) || die "npm install не удался"; fi
+    ok "зависимости установлены"
+  fi
+fi
+mkdir -p "$ROOT/pia" 2>/dev/null
+# mcp.json — личный файл (не в git): создаём из примера, подставляя свой дом
+if [ ! -f "$ROOT/mcp.json" ]; then
+  if [ "$DRY" = 1 ]; then todo "создал бы mcp.json из mcp.example.json"; else
+    sed "s|__HOME__|$HOME|g" "$ROOT/mcp.example.json" > "$ROOT/mcp.json" && ok "mcp.json создан из примера (свои серверы и ключи добавляй туда)"
+  fi
+fi
+
+# ── 4. команда pia ──
+step "4. Команда pia"
+if [ -x "$BIN/pia" ] && grep -q 'agent.mjs' "$BIN/pia"; then ok "$BIN/pia на месте"; else
+  if [ "$DRY" = 1 ]; then todo "создал бы $BIN/pia"; else
+    cat > "$BIN/pia" <<'WRAP'
+#!/bin/sh
+export NODE_NO_WARNINGS=1
+exec "$HOME/.local/share/pi-node/current/bin/node" "$HOME/.pi-agent/agent.mjs" "$@"
+WRAP
+    chmod +x "$BIN/pia"; ok "создан $BIN/pia"
+  fi
+fi
+# вход к провайдеру без отдельной программы pi: тот же ~/.pi/agent/auth.json
+if [ ! -x "$BIN/pia-login" ]; then
+  if [ "$DRY" = 1 ]; then todo "создал бы $BIN/pia-login"; else
+    cat > "$BIN/pia-login" <<'WRAP'
+#!/bin/sh
+# Вход к провайдеру модели (по умолчанию anthropic); пишет ~/.pi/agent/auth.json
+mkdir -p "$HOME/.pi/agent" && cd "$HOME/.pi/agent" || exit 1
+exec "$HOME/.local/share/pi-node/current/bin/node" "$HOME/.pi-agent/node_modules/@earendil-works/pi-ai/dist/cli.js" login "${1:-anthropic}"
+WRAP
+    chmod +x "$BIN/pia-login"; ok "создан $BIN/pia-login (вход к провайдеру)"
+  fi
+fi
+if grep -qs '\.local/bin' "$HOME/.zshrc"; then ok "~/.local/bin уже в PATH (.zshrc)"; else
+  if [ "$DRY" = 1 ]; then todo "добавил бы ~/.local/bin в PATH в ~/.zshrc"; else
+    printf '\nexport PATH="$HOME/.local/bin:$PATH"\n' >> "$HOME/.zshrc"; ok "~/.local/bin добавлен в PATH (.zshrc; открой новое окно терминала)"
+  fi
+fi
+
+# ── 5. службы ──
+step "5. Службы (LaunchAgents)"
+TMPL=$(mktemp -d); render_plists "$TMPL" || die "не удалось сгенерировать plist"
+mkdir -p "$LAB"
+for n in server memory; do
+  L=com.pi-agent.$n
+  if loaded $L; then ok "$L уже загружена"; continue; fi
+  if [ -f "$LAB/$L.plist" ]; then warn "$LAB/$L.plist есть, но не загружен — загружаю существующий"; else
+    do_ cp "$TMPL/$L.plist" "$LAB/$L.plist"
+  fi
+  if [ "$DRY" = 1 ]; then todo "launchctl bootstrap $L"; else
+    launchctl bootstrap "gui/$UID_" "$LAB/$L.plist" 2>/dev/null && ok "$L запущена" || warn "$L не загрузилась (launchctl bootstrap)"
+  fi
+done
+rm -rf "$TMPL"
+
+# ── 6. окно ──
+step "6. Окно pia.app"
+SIGN="$ROOT/mac-app/signing"; KC="$SIGN/pia-signing.keychain-db"
+if [ -f "$KC" ]; then ok "сертификат подписи есть"; else
+  if [ "$DRY" = 1 ]; then todo "создал бы сертификат «pia local signing» и отдельную связку ключей (пароль — в Связке ключей macOS, служба pia-signing)"; else
+    mkdir -p "$SIGN" && chmod 700 "$SIGN"
+    PW=$(openssl rand -hex 16)
+    ( cd "$SIGN" && cat > cert.cnf <<'CNF'
+[req]
+distinguished_name=dn
+x509_extensions=ext
+prompt=no
+[dn]
+CN = pia local signing
+[ext]
+basicConstraints=critical,CA:false
+keyUsage=critical,digitalSignature
+extendedKeyUsage=critical,codeSigning
+CNF
+      openssl req -x509 -newkey rsa:2048 -nodes -days 3650 -keyout key.pem -out cert.pem -config cert.cnf >/dev/null 2>&1 &&
+      { openssl pkcs12 -export -inkey key.pem -in cert.pem -out pia.p12 -passout "pass:$PW" 2>/dev/null ||
+        openssl pkcs12 -export -legacy -inkey key.pem -in cert.pem -out pia.p12 -passout "pass:$PW" 2>/dev/null; } &&
+      security add-generic-password -U -s pia-signing -a pia -w "$PW" &&
+      security create-keychain -p "$PW" pia-signing.keychain-db &&
+      security unlock-keychain -p "$PW" pia-signing.keychain-db &&
+      security import pia.p12 -k pia-signing.keychain-db -P "$PW" -T /usr/bin/codesign >/dev/null &&
+      security set-key-partition-list -S apple-tool:,apple: -s -k "$PW" pia-signing.keychain-db >/dev/null 2>&1 &&
+      rm -f key.pem pia.p12
+    ) && ok "сертификат создан (пароль связки — в Связке ключей macOS)" || warn "сертификат не создан — окно подпишется ad-hoc (права macOS придётся выдавать после каждой сборки)"
+    unset PW
+  fi
+fi
+if [ -d "$APP" ] && loaded com.pi-agent.chat && [ "$UPDATE" = 0 ]; then ok "pia.app установлено, агент окна загружен"; else
+  if [ "$SDKOK" = 0 ]; then warn "окно пропущено (нет SDK)"; elif [ "$DRY" = 1 ]; then todo "собрал бы окно (mac-app/build.sh) и поставил в ~/Applications/pia.app"; else
+    echo "  … сборка окна (несколько минут)"
+    if (cd "$ROOT/mac-app" && timeout 1500 ./build.sh >"$ROOT/mac-app/build.log" 2>&1); then ok "окно собрано и установлено (~/Applications/pia.app)"; else
+      warn "окно не собралось — см. ~/.pi-agent/mac-app/build.log; терминальный pia работает"
+    fi
+  fi
+fi
+fi  # ALREADY=0
+
+# ── итог ──
+step "Вход и разрешения"
+AUTHF="$HOME/.pi/agent/auth.json"
+if [ -s "$AUTHF" ] && grep -q '"anthropic"' "$AUTHF"; then
+  ok "вход к провайдеру выполнен"; NEEDLOGIN=0
+else
+  NEEDLOGIN=1
+  warn "нет входа к провайдеру модели. Выполни одну команду:   pia-login"
+  echo "      (откроется браузер; потом запусти pia). Другой провайдер: pia-login openai — см. README"
+fi
+if [ "$ALREADY" = 0 ]; then
+  echo "  Включи для pia в Системные настройки → Конфиденциальность и безопасность:"
+  echo "      Универсальный доступ, Мониторинг ввода, Запись экрана"
+  if [ "$DRY" = 0 ]; then
+    open "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility" 2>/dev/null
+    [ "$NEEDLOGIN" = 1 ] && open "pia://show" 2>/dev/null
+  fi
+  echo "  Окно pia: двойной правый Shift (или open pia://show)."
+else
+  echo "  Обновить: ./install.sh --update    Удалить: ./uninstall.sh"
+fi
+echo
+echo "Готово."

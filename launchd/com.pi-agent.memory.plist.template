@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>com.pi-agent.memory</string>
+  <key>ProgramArguments</key><array>
+    <string>__HOME__/.local/share/pi-node/current/bin/node</string>
+    <string>__HOME__/.pi-agent/memory-worker.mjs</string>
+  </array>
+  <key>WorkingDirectory</key><string>__HOME__/.pi-agent</string>
+  <key>EnvironmentVariables</key><dict>
+    <key>NODE_NO_WARNINGS</key><string>1</string>
+    <key>PATH</key><string>__HOME__/.local/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
+  </dict>
+  <key>StartInterval</key><integer>1800</integer>
+  <key>RunAtLoad</key><true/>
+  <key>LowPriorityIO</key><true/>
+  <key>Nice</key><integer>10</integer>
+  <key>StandardErrorPath</key><string>__HOME__/.pi-agent/memory-worker.err</string>
+</dict></plist>

@@ -1,0 +1,535 @@
+import AppKit
+import SwiftUI
+
+// Окно pia: borderless — без заголовка и светофора, непрозрачный фон (белый / тёмный, как Raycast AI Chat), перетаскивается за фон, меняет размер.
+// Тень своя (мягкая, как у плавающих окон macOS/Raycast): системная тень активного окна тяжёлая и с тёмным ободком. Поэтому окно
+// шире карточки на `margin` со всех сторон; поля под тенью пропускают щелчки (ignoresMouseEvents), размер меняется за край карточки.
+final class PiaPanel: NSPanel {
+    static let margin: CGFloat = 40   // поле под тень: мягкая тень (σ 14 ≈ blur 28) + смещение 11 вниз гаснет до края окна
+    var onCancel: () -> Void = {}
+    var onResized: () -> Void = {}
+
+    init() {
+        let m = PiaPanel.margin
+        let card = PiaPanel.savedSize()
+        super.init(contentRect: NSRect(origin: .zero, size: NSSize(width: card.width + 2 * m, height: card.height + 2 * m)),
+                   // nonactivatingPanel: окно становится key и принимает ввод сразу, даже если macOS отложила/не дала
+                   // активацию приложения (вызов из фона двойным правым Shift) — как у Spotlight/Raycast
+                   // borderless (без .titled): у окна нет заголовка и кнопок-«светофора» вовсе — macOS не может их
+                   // снова показать (при .titled они вылезали в поле под тень после показа/смены фокуса/размера).
+                   // key-окном остаётся благодаря canBecomeKey; размер — ResizeEdgesView, перемещение — DragArea.
+                   styleMask: [.borderless, .nonactivatingPanel],
+                   backing: .buffered, defer: false)
+        for b in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] { standardWindowButton(b)?.isHidden = true }
+        isMovableByWindowBackground = true
+        isOpaque = false
+        backgroundColor = .clear
+        hasShadow = false          // тень рисует PiaShadowView
+        acceptsMouseMovedEvents = true
+        level = .floating
+        hidesOnDeactivate = false
+        isReleasedWhenClosed = false
+        collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
+        minSize = NSSize(width: 460 + 2 * m, height: 300 + 2 * m)
+        animationBehavior = .utilityWindow
+    }
+
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { true }
+    override func cancelOperation(_ sender: Any?) { onCancel() }
+
+    /// Видимая карточка в координатах экрана
+    var cardFrame: NSRect { frame.insetBy(dx: Self.margin, dy: Self.margin) }
+
+    func saveSize() {
+        UserDefaults.standard.set(cardFrame.width, forKey: "pia.window.w")
+        UserDefaults.standard.set(cardFrame.height, forKey: "pia.window.h")
+    }
+
+    static func savedSize() -> NSSize {
+        let d = UserDefaults.standard
+        let w = d.double(forKey: "pia.window.w"), h = d.double(forKey: "pia.window.h")
+        return (w >= 460 && h >= 300) ? NSSize(width: w, height: h) : NSSize(width: 750, height: 500)
+    }
+}
+
+@MainActor
+final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
+    let model = ChatModel()
+    var panel: PiaPanel!
+    var shiftMonitor: RightShiftDoubleTapMonitor?
+    var optionMonitor: RightOptionDoubleTapMonitor?
+    private var optionItem: NSMenuItem?
+    private var capturing = false
+    private var activity: NSObjectProtocol?   // пока окно видно — без App Nap (опрос и анимации не замедляются)
+    private var launched = false
+    private let launchedAt = Date()
+    private var pendingURLs: [String] = []    // pia://… пришёл до applicationDidFinishLaunching (холодный запуск по ссылке)
+    private var shownAt = Date.distantPast
+    private var hideGen = 0                   // поколение показа: отложенное скрытие не трогает окно, показанное заново
+    /// Сразу после показа фокус может на миг вернуться прежнему приложению (Raycast закрывает своё окно,
+    /// отложенная активация) — это не уход пользователя, окно не прячем.
+    private let showGrace: TimeInterval = 1.0
+    private let ownPid = ProcessInfo.processInfo.processIdentifier
+
+    func applicationWillFinishLaunching(_ n: Notification) {
+        NSAppleEventManager.shared().setEventHandler(self, andSelector: #selector(handleURL(_:reply:)),
+                                                     forEventClass: AEEventClass(kInternetEventClass), andEventID: AEEventID(kAEGetURL))
+    }
+
+    func applicationDidFinishLaunching(_ n: Notification) {
+        NSScrollView.piaHideScrollers()
+        Log.write("запуск pia.app, сервер: \(model.client.configPath)")
+        NSApp.setActivationPolicy(.accessory)
+        buildMenu()
+        buildPanel()
+        launched = true
+
+        shiftMonitor = RightShiftDoubleTapMonitor { [weak self] in
+            DispatchQueue.main.async { self?.captureAndShow() }
+        }
+        shiftMonitor?.start()
+        Log.write("двойной правый Shift: монитор запущен (Универсальный доступ: \(RightShiftDoubleTapMonitor.hasAccessibility ? "есть" : "нет"), Мониторинг ввода: \(RightShiftDoubleTapMonitor.hasInputMonitoring ? "есть" : "нет"))")
+
+        optionMonitor = RightOptionDoubleTapMonitor { [weak self] in
+            DispatchQueue.main.async { self?.toggleByOption() }
+        }
+        if RightOptionDoubleTapMonitor.isEnabled { optionMonitor?.start() }
+        Log.write("двойной правый Option: \(RightOptionDoubleTapMonitor.isEnabled ? "включён" : "выключен")")
+
+        // Прятать окно — только когда пользователь реально перешёл в другое приложение
+        NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didActivateApplicationNotification,
+                                                          object: nil, queue: .main) { [weak self] n in
+            let a = n.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+            let pid = a?.processIdentifier ?? 0, bid = a?.bundleIdentifier ?? "?"
+            MainActor.assumeIsolated { self?.otherAppActivated(pid: pid, bundleId: bid) }
+        }
+        NotificationCenter.default.addObserver(forName: NSWindow.didResignKeyNotification, object: panel, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.panelResignedKey() }
+        }
+
+        let urls = pendingURLs; pendingURLs = []
+        if !CommandLine.arguments.contains("--hidden") && urls.isEmpty { show(source: "запуск") }
+        for u in urls { perform(url: u) }
+        TestHooks.run(self)
+        // при скрытом окне держим ленту свежей, но редко
+        Timer.scheduledTimer(withTimeInterval: 20, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, !self.panel.isVisible else { return }
+                await self.model.pollOnce()
+            }
+        }
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        // при запуске службой (--hidden) macOS сразу шлёт reopen — окно при входе в систему не показываем
+        if CommandLine.arguments.contains("--hidden"), Date().timeIntervalSince(launchedAt) < 2 {
+            Log.write("reopen сразу после запуска --hidden — пропущен")
+            if NSApp.isActive && !(panel?.isVisible ?? false) { NSApp.hide(nil) }   // фокус — обратно прежнему приложению
+            return false
+        }
+        if launched { show(source: "reopen") }
+        return false
+    }
+
+    // Потеря активности сама по себе окно не прячет (это бывает и из-за внутренних событий) — см. otherAppActivated.
+    func applicationDidBecomeActive(_ n: Notification) {
+        if TestHooks.offscreen { return }
+        panel?.level = .floating
+    }
+
+    private func otherAppActivated(pid: pid_t, bundleId: String) {
+        guard let panel, panel.isVisible, !TestHooks.offscreen, pid != ownPid, bundleId != Bundle.main.bundleIdentifier else { return }
+        if PiaDrop.recentlyDragging || bundleId.hasPrefix("pl.maketheweb") {
+            Log.write("фокус ушёл в \(bundleId) во время перетаскивания/CleanShot — не прячу")
+            return
+        }
+        let dt = Date().timeIntervalSince(shownAt)
+        if dt < showGrace {
+            Log.write("фокус ушёл в \(bundleId) через \(String(format: "%.2f", dt)) с после показа — не прячу, возвращаю фокус")
+            focusPanel()
+            return
+        }
+        hide(reason: "переход в \(bundleId)")
+    }
+
+    /// Окно не активирующее (nonactivatingPanel): если pia так и не стала активной, а пользователь щёлкнул в окно
+    /// уже активного приложения, didActivateApplication не приходит — ловим по потере key.
+    private func panelResignedKey() {
+        guard !TestHooks.offscreen else { return }
+        if PiaDrop.recentlyDragging { Log.write("потеря key во время перетаскивания — не прячу"); return }
+        let gen = hideGen
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+            guard let self, gen == self.hideGen, self.panel.isVisible, !self.panel.isKeyWindow else { return }
+            guard Date().timeIntervalSince(self.shownAt) >= self.showGrace else { self.focusPanel(); return }
+            if PiaDrop.recentlyDragging || NSWorkspace.shared.frontmostApplication?.bundleIdentifier?.hasPrefix("pl.maketheweb") == true { return }
+            // своё окно (поповер, диалог) стало key или pia активна — это не уход
+            if NSApp.keyWindow != nil || NSApp.isActive { return }
+            let front = NSWorkspace.shared.frontmostApplication
+            guard let front, front.processIdentifier != self.ownPid else { return }
+            self.hide(reason: "щелчок в \(front.bundleIdentifier ?? "?")")
+        }
+    }
+
+    @objc func handleURL(_ event: NSAppleEventDescriptor, reply: NSAppleEventDescriptor) {
+        let s = event.paramDescriptor(forKeyword: AEKeyword(keyDirectObject))?.stringValue ?? ""
+        Log.write("url: \(s)")
+        // при холодном запуске по ссылке событие приходит раньше applicationDidFinishLaunching — окна ещё нет
+        guard launched else { pendingURLs.append(s); return }
+        perform(url: s)
+    }
+
+    private func perform(url s: String) {
+        let u = URL(string: s)
+        let cmd = (u?.host ?? u?.path ?? "show").lowercased()
+        switch cmd {
+        case "capture", "context": captureAndShow()
+        case "hide": hide(reason: "pia://hide")
+        case "option-on": setOptionHotkey(true)
+        case "option-off": setOptionHotkey(false)
+        case "toggle": isFocused ? hide(reason: "pia://toggle") : show(source: "pia://toggle")
+        default: show(source: "pia://\(cmd)")
+        }
+    }
+
+    /// Двойной правый Option: окно активно — спрятать, иначе показать и вывести вперёд (без снимка контекста).
+    private func toggleByOption() {
+        if isFocused { hide(reason: "двойной правый Option") } else { show(source: "двойной правый Option") }
+    }
+
+    func setOptionHotkey(_ on: Bool) {
+        RightOptionDoubleTapMonitor.isEnabled = on
+        if on { optionMonitor?.start() } else { optionMonitor?.stop() }
+        optionItem?.state = on ? .on : .off
+        Log.write("двойной правый Option: \(on ? "включён" : "выключен")")
+    }
+
+    @objc func toggleOptionHotkey() { setOptionHotkey(!RightOptionDoubleTapMonitor.isEnabled) }
+
+    private var isFocused: Bool { panel.isVisible && (panel.isKeyWindow || NSApp.isActive) }
+
+    // MARK: окно
+
+    private func buildPanel() {
+        panel = PiaPanel()
+        panel.delegate = self
+        panel.onCancel = { [weak self] in self?.hide(reason: "Esc") }
+        let root = ChatView(model: model, onEscape: { [weak self] in self?.hide(reason: "Esc") })
+        let host = NSHostingView(rootView: root)
+        host.sizingOptions = []
+
+        let m = PiaPanel.margin
+        let container = NSView()
+        let shadow = PiaShadowView()
+        let bg = PiaBackgroundView()
+        PiaDrop.model = model
+        panel.registerForDraggedTypes(PiaDrop.types)
+        let edges = ResizeEdgesView()
+        edges.onEnd = { [weak self] in self?.panel.saveSize() }
+        for v in [shadow, bg] { v.translatesAutoresizingMaskIntoConstraints = false; container.addSubview(v) }
+        for v in [host, edges] { v.translatesAutoresizingMaskIntoConstraints = false; bg.addSubview(v) }
+        var cs: [NSLayoutConstraint] = []
+        for v in [shadow, bg] {
+            cs += [v.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: m),
+                   v.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -m),
+                   v.topAnchor.constraint(equalTo: container.topAnchor, constant: m),
+                   v.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -m)]
+        }
+        for v in [host, edges] {
+            cs += [v.leadingAnchor.constraint(equalTo: bg.leadingAnchor), v.trailingAnchor.constraint(equalTo: bg.trailingAnchor),
+                   v.topAnchor.constraint(equalTo: bg.topAnchor), v.bottomAnchor.constraint(equalTo: bg.bottomAnchor)]
+        }
+        NSLayoutConstraint.activate(cs)
+        panel.contentView = container
+        panel.center()
+
+        // поля под тенью пропускают щелчки в окна позади
+        let mask: NSEvent.EventTypeMask = [.mouseMoved, .leftMouseUp, .rightMouseUp, .leftMouseDragged]
+        mouseMonitors = [
+            NSEvent.addGlobalMonitorForEvents(matching: mask) { [weak self] _ in MainActor.assumeIsolated { self?.updateMousePassThrough() } } as Any,
+            NSEvent.addLocalMonitorForEvents(matching: mask) { [weak self] e in self?.updateMousePassThrough(); return e } as Any,
+        ]
+    }
+
+    private var mouseMonitors: [Any] = []
+
+    private func updateMousePassThrough() {
+        guard let panel, panel.isVisible else { return }
+        let inside = panel.cardFrame.insetBy(dx: -1, dy: -1).contains(NSEvent.mouseLocation)
+        if NSEvent.pressedMouseButtons != 0 {
+            // кнопка зажата: тянут что-то (в т. ч. миниатюру CleanShot из другого приложения) — над карточкой окно
+            // обязано принимать события, иначе drag «проваливается» в окно позади. Никогда не включаем пропуск во время нажатия.
+            if inside && panel.ignoresMouseEvents {
+                panel.ignoresMouseEvents = false
+                Log.write("drag над карточкой: пропуск мыши выключен")
+            }
+            return
+        }
+        if panel.ignoresMouseEvents == inside { panel.ignoresMouseEvents = !inside }
+    }
+
+    func show(source: String = "") {
+        guard let panel else { return }
+        hideGen += 1                         // отменяет незавершённое скрытие
+        let wasVisible = panel.isVisible && panel.alphaValue > 0.99
+        if !panel.isVisible {
+            centerOnActiveScreen()
+            panel.alphaValue = 0
+        }
+        shownAt = Date()
+        Log.write("показ (\(source)), было видно: \(wasVisible), впереди: \(NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "-")")
+        panel.level = .floating
+        if TestHooks.offscreen {
+            // проверочный режим: не отнимать фокус у пользователя, окно под всеми окнами (screencapture -l снимает и так)
+            panel.level = ProcessInfo.processInfo.environment["PIA_TEST_FLOAT"] == "1" ? .floating
+                : NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.desktopIconWindow)) - 1)
+            panel.orderFrontRegardless()
+            panel.makeKey()
+            if ProcessInfo.processInfo.environment["PIA_TEST_DARK"] == "1" { NSApp.appearance = NSAppearance(named: .darkAqua) }
+        } else {
+            focusPanel()
+            // активация из фона (двойной правый Shift) бывает отложенной — проверяем и повторяем
+            let gen = hideGen
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+                guard let self, gen == self.hideGen, self.panel.isVisible else { return }
+                if !NSApp.isActive || !self.panel.isKeyWindow { self.focusPanel() }
+                Log.write("окно: key=\(self.panel.isKeyWindow), pia активна=\(NSApp.isActive)")
+            }
+        }
+        updateMousePassThrough()
+        if !wasVisible {
+            NSAnimationContext.runAnimationGroup { ctx in
+                ctx.duration = 0.14
+                panel.animator().alphaValue = 1
+            }
+            model.scrollToBottomToken += 1
+        }
+        model.startPolling()
+        if activity == nil {
+            activity = ProcessInfo.processInfo.beginActivity(options: [.userInitiatedAllowingIdleSystemSleep], reason: "окно pia открыто")
+        }
+    }
+
+    /// Окно впереди, key, курсор в поле ввода; приложение — активное.
+    private func focusPanel() {
+        NSApp.activate()
+        if !NSApp.isActive { NSRunningApplication.current.activate(options: [.activateAllWindows]) }
+        panel.orderFrontRegardless()
+        panel.makeKeyAndOrderFront(nil)
+        if let tv = model.inputView, panel.firstResponder !== tv { panel.makeFirstResponder(tv) }
+    }
+
+    func hide(reason: String = "") {
+        guard let panel, panel.isVisible else { return }
+        Log.write("скрыто: \(reason)")
+        hideGen += 1
+        let gen = hideGen
+        model.stopPolling()
+        if let a = activity { ProcessInfo.processInfo.endActivity(a); activity = nil }
+        NSAnimationContext.runAnimationGroup({ ctx in
+            ctx.duration = 0.1
+            panel.animator().alphaValue = 0
+        }, completionHandler: { [weak self] in
+            Task { @MainActor in
+                // окно успели показать снова — не прятать
+                guard let self, gen == self.hideGen else { return }
+                self.panel.orderOut(nil)
+                self.panel.alphaValue = 1
+                if NSApp.isActive { NSApp.hide(nil) }   // фокус возвращается в прежнее приложение
+            }
+        })
+    }
+
+    private func centerOnActiveScreen() {
+        let mouse = NSEvent.mouseLocation
+        let screen = NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) } ?? NSScreen.main
+        guard let vf = screen?.visibleFrame else { panel.center(); return }
+        let s = panel.frame.size
+        // как Raycast: по центру, чуть выше середины
+        let x = vf.midX - s.width / 2
+        let y = vf.midY - s.height / 2 + vf.height * 0.06
+        panel.setFrameOrigin(NSPoint(x: round(x), y: round(min(y, vf.maxY - s.height + PiaPanel.margin))))
+    }
+
+    /// Двойное нажатие правого Shift: сначала снимаем контекст (пока впереди чужое приложение), потом показываем окно
+    func captureAndShow() {
+        guard !capturing else { return }
+        capturing = true
+        let pia = isFocused
+        Task { @MainActor in
+            defer { capturing = false }
+            if !pia, let ctx = await ContextCapture.captureFrontmost() {
+                model.attachContext(ctx)
+            }
+            show(source: "двойной правый Shift")
+        }
+    }
+
+    func windowDidEndLiveResize(_ n: Notification) { panel.saveSize() }
+
+    // Меню не видно (LSUIElement), но без него не работают ⌘C/⌘V/⌘A/⌘Z
+    private func buildMenu() {
+        let main = NSMenu()
+        let appItem = NSMenuItem()
+        let appMenu = NSMenu()
+        appMenu.addItem(withTitle: "Скрыть pia", action: #selector(hideAction), keyEquivalent: "w").target = self
+        let oi = appMenu.addItem(withTitle: "Открывать по двойному правому Option", action: #selector(toggleOptionHotkey), keyEquivalent: "")
+        oi.target = self
+        oi.state = RightOptionDoubleTapMonitor.isEnabled ? .on : .off
+        optionItem = oi
+        appMenu.addItem(withTitle: "Выйти из pia", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        appItem.submenu = appMenu
+        main.addItem(appItem)
+
+        let editItem = NSMenuItem()
+        let edit = NSMenu(title: "Правка")
+        edit.addItem(withTitle: "Отменить", action: Selector(("undo:")), keyEquivalent: "z")
+        let redo = edit.addItem(withTitle: "Повторить", action: Selector(("redo:")), keyEquivalent: "z")
+        redo.keyEquivalentModifierMask = [.command, .shift]
+        edit.addItem(.separator())
+        edit.addItem(withTitle: "Вырезать", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        edit.addItem(withTitle: "Копировать", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        edit.addItem(withTitle: "Вставить", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        edit.addItem(withTitle: "Выделить всё", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        editItem.submenu = edit
+        main.addItem(editItem)
+        NSApp.mainMenu = main
+    }
+
+    @objc func hideAction() { hide(reason: "⌘W") }
+}
+
+// Непрозрачный фон карточки: светлая тема — белый, тёмная — тёмно-серый; волосяная рамка, скруглённые углы.
+final class PiaBackgroundView: NSView {
+    static let radius: CGFloat = 16
+    static func fill(dark: Bool) -> NSColor { dark ? NSColor(srgbRed: 0.106, green: 0.106, blue: 0.11, alpha: 1) : .white }
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        layer?.cornerRadius = Self.radius
+        layer?.cornerCurve = .continuous
+        layer?.masksToBounds = true
+        registerForDraggedTypes(PiaDrop.types)
+        layer?.borderWidth = 0.5   // край как у Raycast AI Chat: 0.5 pt, почти незаметный
+    }
+    required init?(coder: NSCoder) { fatalError() }
+    // приём перетаскивания всей карточкой (дети без своей регистрации отдают drag сюда)
+    override func draggingEntered(_ s: NSDraggingInfo) -> NSDragOperation { PiaDrop.entered(s, where: "карточка") }
+    override func draggingUpdated(_ s: NSDraggingInfo) -> NSDragOperation { PiaDrop.canAccept(s.draggingPasteboard) ? .copy : [] }
+    override func draggingExited(_ s: NSDraggingInfo?) { PiaDrop.exited(where: "карточка") }
+    override func prepareForDragOperation(_ s: NSDraggingInfo) -> Bool { PiaDrop.canAccept(s.draggingPasteboard) }
+    override func performDragOperation(_ s: NSDraggingInfo) -> Bool { PiaDrop.drop(s, where: "карточка") }
+    override func draggingEnded(_ s: NSDraggingInfo) { PiaDrop.active = false; PiaDrop.lastEnd = Date() }
+    override var wantsUpdateLayer: Bool { true }
+    override var isOpaque: Bool { false }
+    private var isDark: Bool { effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua }
+    override func updateLayer() {
+        layer?.backgroundColor = Self.fill(dark: isDark).cgColor
+        layer?.borderColor = (isDark ? NSColor(white: 1, alpha: 0.09) : NSColor(white: 0, alpha: 0.07)).cgColor
+    }
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        needsDisplay = true
+    }
+}
+
+// Тень под карточкой (вместо системной): широкая мягкая + узкая контактная.
+final class PiaShadowView: NSView {
+    private let soft = CALayer(), contact = CALayer()
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        for l in [soft, contact] { layer?.addSublayer(l); l.shadowColor = NSColor.black.cgColor; l.masksToBounds = false }
+    }
+    required init?(coder: NSCoder) { fatalError() }
+    override var wantsUpdateLayer: Bool { true }
+    override var isOpaque: Bool { false }
+    private var isDark: Bool { effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua }
+    override func layout() {
+        super.layout()
+        let path = CGPath(roundedRect: bounds, cornerWidth: PiaBackgroundView.radius, cornerHeight: PiaBackgroundView.radius, transform: nil)
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        for l in [soft, contact] { l.frame = bounds; l.shadowPath = path }
+        CATransaction.commit()
+    }
+    override func updateLayer() {
+        let dark = isDark
+        // широкая мягкая (вниз) + близкая контактная; в тёмной теме сильнее, иначе на тёмном фоне не видно
+        // shadowRadius у CALayer ≈ половина «blur» из Figma/CSS: 14 ≈ blur 28, 2 ≈ blur 4
+        soft.shadowRadius = 14; soft.shadowOffset = CGSize(width: 0, height: -11); soft.shadowOpacity = dark ? 0.34 : 0.20
+        contact.shadowRadius = 2; contact.shadowOffset = CGSize(width: 0, height: -1); contact.shadowOpacity = dark ? 0.20 : 0.09
+    }
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        needsDisplay = true
+    }
+}
+
+// Изменение размера за край карточки (полосы ~5 pt по краям и углы); остальное пропускает к содержимому.
+final class ResizeEdgesView: NSView {
+    var onEnd: () -> Void = {}
+    private let band: CGFloat = 5, corner: CGFloat = 14
+    private var start: (mouse: NSPoint, frame: NSRect, edges: Set<Edge>)?
+    enum Edge { case left, right, top, bottom }
+
+    override var mouseDownCanMoveWindow: Bool { false }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    private func edges(at p: NSPoint) -> Set<Edge> {
+        let w = bounds.width, h = bounds.height
+        var e = Set<Edge>()
+        if p.y <= band || p.y >= h - band {
+            e.insert(p.y <= band ? .bottom : .top)
+            if p.x < corner { e.insert(.left) } else if p.x > w - corner { e.insert(.right) }
+        }
+        if p.x <= band || p.x >= w - band {
+            e.insert(p.x <= band ? .left : .right)
+            if p.y < corner { e.insert(.bottom) } else if p.y > h - corner { e.insert(.top) }
+        }
+        return e
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard let sv = superview else { return nil }
+        let p = convert(point, from: sv)
+        return bounds.contains(p) && !edges(at: p).isEmpty ? self : nil
+    }
+
+    override func resetCursorRects() {
+        let b = bounds, w = b.width, h = b.height
+        func add(_ r: NSRect, _ pos: NSCursor.FrameResizePosition) {
+            addCursorRect(r, cursor: NSCursor.frameResize(position: pos, directions: .all))
+        }
+        add(NSRect(x: corner, y: 0, width: w - 2 * corner, height: band), .bottom)
+        add(NSRect(x: corner, y: h - band, width: w - 2 * corner, height: band), .top)
+        add(NSRect(x: 0, y: corner, width: band, height: h - 2 * corner), .left)
+        add(NSRect(x: w - band, y: corner, width: band, height: h - 2 * corner), .right)
+        add(NSRect(x: 0, y: 0, width: corner, height: band), .bottomLeft); add(NSRect(x: 0, y: 0, width: band, height: corner), .bottomLeft)
+        add(NSRect(x: w - corner, y: 0, width: corner, height: band), .bottomRight); add(NSRect(x: w - band, y: 0, width: band, height: corner), .bottomRight)
+        add(NSRect(x: 0, y: h - band, width: corner, height: band), .topLeft); add(NSRect(x: 0, y: h - corner, width: band, height: corner), .topLeft)
+        add(NSRect(x: w - corner, y: h - band, width: corner, height: band), .topRight); add(NSRect(x: w - band, y: h - corner, width: band, height: corner), .topRight)
+    }
+
+    override func mouseDown(with e: NSEvent) {
+        guard let win = window else { return }
+        start = (NSEvent.mouseLocation, win.frame, edges(at: convert(e.locationInWindow, from: nil)))
+    }
+
+    override func mouseDragged(with e: NSEvent) {
+        guard let win = window, let s = start else { return }
+        let m = NSEvent.mouseLocation
+        let dx = m.x - s.mouse.x, dy = m.y - s.mouse.y
+        var f = s.frame
+        let minW = win.minSize.width, minH = win.minSize.height
+        if s.edges.contains(.right) { f.size.width = max(minW, s.frame.width + dx) }
+        if s.edges.contains(.left) { let w = max(minW, s.frame.width - dx); f.origin.x = s.frame.maxX - w; f.size.width = w }
+        if s.edges.contains(.top) { f.size.height = max(minH, s.frame.height + dy) }
+        if s.edges.contains(.bottom) { let h = max(minH, s.frame.height - dy); f.origin.y = s.frame.maxY - h; f.size.height = h }
+        win.setFrame(f, display: true)
+    }
+
+    override func mouseUp(with e: NSEvent) {
+        if start != nil { onEnd() }
+        start = nil
+    }
+}
