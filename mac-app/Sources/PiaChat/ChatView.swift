@@ -26,7 +26,7 @@ struct ChatView: View {
                 // прозрачная область-хват: лента идёт под ней на всю высоту, отдельной плашки и разделителя нет
                 feed
                     .overlay(alignment: .top) {
-                        DragArea().frame(height: ChatView.dragStrip)
+                        GrabStrip().frame(height: ChatView.dragStrip)
                     }
                     // как у Raycast: лента плавно исчезает под полем ввода
                     .overlay(alignment: .bottom) {
@@ -220,6 +220,38 @@ struct ScrollMetrics: Equatable {
     var offset: CGFloat
     var content: CGFloat
     var container: CGFloat
+}
+
+// Верхняя область-хват: рука openHand, при перетаскивании closedHand
+struct GrabStrip: NSViewRepresentable {
+    func makeNSView(context: Context) -> GrabStripView { GrabStripView() }
+    func updateNSView(_ v: GrabStripView, context: Context) {}
+}
+
+final class GrabStripView: NSView {
+    private var dragging = false
+    override var mouseDownCanMoveWindow: Bool { false }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    override func resetCursorRects() { addCursorRect(bounds, cursor: dragging ? .closedHand : .openHand) }
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        for t in trackingAreas { removeTrackingArea(t) }
+        addTrackingArea(NSTrackingArea(rect: .zero, options: [.cursorUpdate, .mouseEnteredAndExited, .mouseMoved, .activeAlways, .inVisibleRect], owner: self, userInfo: nil))
+    }
+    override func cursorUpdate(with event: NSEvent) { (dragging ? NSCursor.closedHand : NSCursor.openHand).set() }
+    override func mouseEntered(with event: NSEvent) { if !dragging { NSCursor.openHand.set() } }
+    override func mouseMoved(with event: NSEvent) { if !dragging { NSCursor.openHand.set() } }
+    override func mouseExited(with event: NSEvent) { if !dragging { NSCursor.arrow.set() } }
+    override func mouseDown(with event: NSEvent) {
+        guard let win = window else { return }
+        dragging = true
+        NSCursor.closedHand.set()
+        win.performDrag(with: event)
+        dragging = false
+        let p = convert(win.mouseLocationOutsideOfEventStream, from: nil)
+        if bounds.contains(p) { NSCursor.openHand.set() } else { NSCursor.arrow.set() }
+        win.invalidateCursorRects(for: self)
+    }
 }
 
 // Фон, за который окно перетаскивается
