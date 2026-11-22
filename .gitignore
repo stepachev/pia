@@ -16,6 +16,7 @@
 !/mac-app/test-mock.mjs
 !/mac-app/Sources/**
 !/mac-app/Resources/Info.plist
+!/mac-app/Resources/icon-source.png
 !/mac-app/Resources/*.entitlements
 !/mac-app/context-check/*.swift
 !/mac-app/context-check/*.sh
@@ -38,7 +39,6 @@ node_modules/
 *.sqlite*
 feed.jsonl
 *.backup.*
-/mac-app/README.md
 /mcp.json
 /secrets/
 /launchd/*.plist

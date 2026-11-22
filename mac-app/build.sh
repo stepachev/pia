@@ -1,7 +1,7 @@
 #!/bin/zsh
 # Сборка pia.app: swift build (SDK 26.5 — в SDK 27 у Command Line Tools нет плагина SwiftUIMacros для @State),
 # бандл, значок, подпись постоянным самоподписанным сертификатом «pia local signing» (права macOS не сбрасываются),
-# установка в ~/Applications/pia.app + автозапуск (~/Library/LaunchAgents/com.pi-agent.chat.plist).  Запуск: ./build.sh [--no-install]
+# установка в ~/Applications/pia.app + автозапуск (~/Library/LaunchAgents/com.pi-agent.chat.plist, из ../launchd/com.pi-agent.chat.plist.template).  Запуск: ./build.sh [--no-install]
 set -e
 cd "${0:A:h}"
 # SDK: берём 26.5, иначе любой 26.x (в CLT с SDK 27 swift build падает на @State); Xcode.app — запасной путь
@@ -65,7 +65,10 @@ if [ "$1" != "--no-install" ]; then
   ditto $APP ~/Applications/pia.app
   LSR=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
   $LSR -u $PWD/$APP 2>/dev/null || true; $LSR -f ~/Applications/pia.app || true
-  sed "s|__HOME__|$HOME|g" Resources/com.pi-agent.chat.plist > $AGENT
+  TPL=${0:A:h}/../launchd/com.pi-agent.chat.plist.template
+  [ -f "$TPL" ] || { echo "нет шаблона $TPL"; exit 1; }
+  mkdir -p ~/Library/LaunchAgents
+  sed "s|__HOME__|$HOME|g" "$TPL" > $AGENT
   launchctl bootstrap gui/$(id -u) $AGENT
   echo "установлено: ~/Applications/pia.app (работает в фоне; окно — двойное нажатие правого Shift, pia://show, open -a pia)"
 fi

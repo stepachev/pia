@@ -6,7 +6,8 @@
 - Mac с macOS 13+ (окно собирается с SDK MacOSX 26.x — Command Line Tools или Xcode).
 - Свой аккаунт Claude (вход через `pia-login`, см. ниже).
 - Разрешения macOS для окна: Универсальный доступ (нужен для двойного правого Option и Shift), Мониторинг ввода, Запись экрана.
-- Свои ключи для подключений MCP (Notion, Framer и т. д.) — по желанию.
+- Для окна: Command Line Tools (`xcode-select --install`) с SDK macOS 26.x (`/Library/Developer/CommandLineTools/SDKs/MacOSX26*.sdk`) или Xcode; без него сборка окна остановится с сообщением.
+- Ключи для подключений MCP (Notion, Framer и т. д.) человек добавляет сам в `mcp.json` — в репозитории их нет; подключения по желанию.
 
 ## Установка (одна команда)
 ```
