@@ -125,10 +125,10 @@ else
   fi
 fi
 mkdir -p "$ROOT/pia" 2>/dev/null
-# mcp.json — личный файл (не в git): создаём из примера, подставляя свой дом
+# mcp.json — личный файл (не в git). По умолчанию пустой: никакие MCP-серверы не ставятся
 if [ ! -f "$ROOT/mcp.json" ]; then
-  if [ "$DRY" = 1 ]; then todo "создал бы mcp.json из mcp.example.json"; else
-    sed "s|__HOME__|$HOME|g" "$ROOT/mcp.example.json" > "$ROOT/mcp.json" && ok "mcp.json создан из примера (свои серверы и ключи добавляй туда)"
+  if [ "$DRY" = 1 ]; then todo "создал бы пустой mcp.json"; else
+    printf '{"mcpServers": {}}\n' > "$ROOT/mcp.json" && ok "mcp.json создан пустым (подключения MCP — по желанию, см. README)"
   fi
 fi
 

@@ -7,13 +7,13 @@
 - Свой аккаунт Claude (вход через `pia-login`, см. ниже).
 - Разрешения macOS для окна: Универсальный доступ (нужен для двойного правого Option и Shift), Мониторинг ввода, Запись экрана.
 - Для окна: Command Line Tools (`xcode-select --install`) с SDK macOS 26.x (`/Library/Developer/CommandLineTools/SDKs/MacOSX26*.sdk`) или Xcode; без него сборка окна остановится с сообщением.
-- Ключи для подключений MCP (Notion, Framer и т. д.) человек добавляет сам в `mcp.json` — в репозитории их нет; подключения по желанию.
+- Подключения MCP необязательны: по умолчанию не ставится ни один сервер (см. «Подключить свои сервисы (MCP)»).
 
 ## Установка (одна команда)
 ```
 git clone https://github.com/stepachev/pia ~/.pi-agent && ~/.pi-agent/install.sh
 ```
-Установщик идемпотентный: ставит Command Line Tools (если нет — попросит дождаться и запустить снова), Node 22 LTS, зависимости, команды `pia` и `pia-login`, службы LaunchAgents из `launchd/*.plist.template` (вместо `__HOME__` подставляется твоя домашняя папка), создаёт `mcp.json` из `mcp.example.json`, делает сертификат подписи, собирает и ставит окно. Если уже установлено — только сообщит. `./install.sh --check` — показать, что будет сделано, ничего не меняя; `./install.sh --update` — обновить код и окно.
+Установщик идемпотентный: ставит Command Line Tools (если нет — попросит дождаться и запустить снова), Node 22 LTS, зависимости, команды `pia` и `pia-login`, службы LaunchAgents из `launchd/*.plist.template` (вместо `__HOME__` подставляется твоя домашняя папка), создаёт пустой `mcp.json` (без MCP-серверов), делает сертификат подписи, собирает и ставит окно. Если уже установлено — только сообщит. `./install.sh --check` — показать, что будет сделано, ничего не меняя; `./install.sh --update` — обновить код и окно.
 
 ## Вход к провайдеру
 Одна команда: `pia-login` (по умолчанию Anthropic, откроется браузер; вход пишется в `~/.pi/agent/auth.json`, права 600). Потом `pia`. Другой провайдер: `pia-login openai` (список: `node node_modules/@earendil-works/pi-ai/dist/cli.js list`); модели и тип провайдера меняются в `shared.mjs` (строки `SONNET`/`OPUS`/`HAIKU`, `import … Provider` и `models.setProvider(…)`), затем `pia --restart`.
@@ -24,7 +24,22 @@ git clone https://github.com/stepachev/pia ~/.pi-agent && ~/.pi-agent/install.sh
 ## Сохранение и удаление
 - Сохранить свои правки в git: `./save.sh` (белый список в `.gitignore`, проверка на секреты; свои шаблоны для проверки — по строке в `~/.pi-agent/secrets/save-patterns.txt`, файл вне git). Память (`pia/память/`), история (`*.sqlite`), `auth.json`, `mac-app/signing/` в репозиторий не попадают — копируй отдельно.
 - Удалить: `./uninstall.sh` (службы, окно, команды; `~/.pi-agent` и память не трогает).
-- MCP (`mcp.json` создаётся из `mcp.example.json`, в git не попадает; свои ключи держи в `secrets/`, токен для http-сервера — поле `bearerFile`): `notion`/`framer` — через `npx mcp-remote` (при первом запуске откроется браузер), `figwright` — плюс плагин Figwright в Figma.
+- MCP: см. раздел «Подключить свои сервисы (MCP)» ниже.
+
+## Подключить свои сервисы (MCP)
+По умолчанию установщик создаёт `~/.pi-agent/mcp.json` с пустым списком — `{"mcpServers": {}}`, никакие серверы не подключаются и окон входа не открывается. Файл личный, в git не попадает. Нужный сервис добавь сам в `mcpServers`:
+```json
+{
+  "mcpServers": {
+    "my-http": { "url": "https://example.com/mcp", "bearerFile": "~/.pi-agent/secrets/my-http.token" },
+    "my-stdio": { "command": "/Users/ИМЯ/.local/bin/npx", "args": ["-y", "некий-пакет-mcp"], "env": { "KEY": "значение" } }
+  }
+}
+```
+- `url` — http-сервер (токен — в поле `headers` или в файле через `bearerFile`); `command`/`args`/`env` — локальный сервер (например через `npx`); `"disabled": true` — временно выключить.
+- Секреты держи в `~/.pi-agent/secrets/`, не в репозитории.
+- Применить: `pia --restart` (обрывает работающих помощников). Какие серверы подключились — спроси у помощника.
+- Необязательный пример: Notion/Framer через `npx -y mcp-remote https://mcp.notion.com/mcp` (откроется окно входа в браузере); Figma — `@figwright/mcp` плюс плагин Figwright в Figma.
 
 ## Правила для агентов, правящих pia
 - **Тесты не писать и не запускать** (решение пользователя). Проверка — `node --check *.mjs`, `mac-app/build.sh --no-install`, `bash -n`.
