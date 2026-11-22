@@ -97,5 +97,14 @@ if [ "$1" != "--no-install" ]; then
   LSR=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
   $LSR -u $PWD/$APP 2>/dev/null || true; $LSR -f ~/Applications/pia.app || true
   ~/Applications/pia.app/Contents/MacOS/pia-app --register-only
+  # служба chat (окно) должна подняться сама: ждём до 15 с; если launchd не запустил (статус 78) — перерегистрация и kickstart
+  up() { for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do pgrep -x pia-app >/dev/null && return 0; sleep 1; done; return 1; }
+  if ! up; then
+    echo "окно не поднялось службой — перерегистрация"
+    ~/Applications/pia.app/Contents/MacOS/pia-app --unregister >/dev/null 2>&1 || true; sleep 2
+    ~/Applications/pia.app/Contents/MacOS/pia-app --register-only
+    up || launchctl kickstart -k gui/$U/com.pi-agent.chat 2>/dev/null || true
+    up && echo "окно запущено службой" || echo "⚠ окно не поднялось: launchctl print gui/$U/com.pi-agent.chat"
+  fi
   echo "установлено: ~/Applications/pia.app (службы server и chat — в бандле, через SMAppService; окно — двойной правый Option/Shift, pia://show, open -a pia)"
 fi
