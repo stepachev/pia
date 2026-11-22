@@ -65,14 +65,15 @@ REUSE_RT=0
 if [ "$FULL" != 1 ] && [ "$NOINST" != 1 ] && [ -x "$INST/Contents/MacOS/pia" ] && [ -x "$NODE_SRC" ]; then
   # рантайм не менялся? сравниваем установленный (без подписи) с исходным Node
   NS=$(python3 -c 'import os,sys;print(os.path.realpath(sys.argv[1]))' "$NODE_SRC")
-  T=$(mktemp); cp "$INST/Contents/MacOS/pia" $T; codesign --remove-signature $T 2>/dev/null
-  cmp -s $T "$NS" && REUSE_RT=1; rm -f $T
+  # codesign --remove-signature искажает заголовок, поэтому сравниваем sha256 исходного Node с записанным при установке рантайма
+  [ "$(shasum -a 256 "$NS" | cut -d' ' -f1)" = "$(cat build/runtime.sha 2>/dev/null)" ] && REUSE_RT=1
 fi
 if [ "$REUSE_RT" = 1 ]; then
   cp -p "$INST/Contents/MacOS/pia" $APP/Contents/MacOS/pia   # тот же файл с той же подписью: cdhash рантайма не меняется
   echo "рантайм не менялся — оставлен как есть"
 elif [ -x "$NODE_SRC" ]; then
   NODE_SRC=$(python3 -c 'import os,sys;print(os.path.realpath(sys.argv[1]))' "$NODE_SRC")
+  shasum -a 256 "$NODE_SRC" | cut -d' ' -f1 > build/runtime.sha.new
   cp -f "$NODE_SRC" $APP/Contents/MacOS/pia
   chmod 755 $APP/Contents/MacOS/pia
   echo "рантайм: $NODE_SRC ($($APP/Contents/MacOS/pia -v)) → pia.app/Contents/MacOS/pia"
@@ -107,6 +108,7 @@ if [ "$NOINST" != 1 ]; then
   # сервер трогаем только при --full, если бандла нет, рантайм поменялся или изменился plist сервера
   if [ "$FULL" = 1 ] || [ ! -d "$I" ] || [ "$REUSE_RT" != 1 ] || ! cmp -s $APP/Contents/Library/LaunchAgents/com.pi-agent.server.plist "$SP"; then
     echo "полная установка: бандл целиком, обе службы (сервер перезапустится)"
+    [ -f build/runtime.sha.new ] && mv build/runtime.sha.new build/runtime.sha
     $I/Contents/MacOS/pia-app --unregister >/dev/null 2>&1 || true
     pkill -x pia-app 2>/dev/null && sleep 0.5 || true
     pkill -x PiaChat 2>/dev/null || true
