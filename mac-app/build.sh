@@ -1,6 +1,7 @@
 #!/bin/zsh
 # Сборка pia.app: swift build (SDK 26.5 — в SDK 27 у Command Line Tools нет плагина SwiftUIMacros для @State),
 # бандл, значок, подпись постоянным самоподписанным сертификатом «pia local signing» (права macOS не сбрасываются),
+# рантайм pia (копия Node в Contents/MacOS/pia, подписана вместе с бандлом),
 # установка в ~/Applications/pia.app + автозапуск (~/Library/LaunchAgents/com.pi-agent.chat.plist, из ../launchd/com.pi-agent.chat.plist.template).  Запуск: ./build.sh [--no-install]
 set -e
 cd "${0:A:h}"
@@ -43,14 +44,32 @@ if [ ! -f build/AppIcon.icns ] || [ Resources/icon-source.png -nt build/AppIcon.
   iconutil -c icns build/AppIcon.iconset -o build/AppIcon.icns
 fi
 cp build/AppIcon.icns $APP/Contents/Resources/AppIcon.icns
-# подпись: постоянная личность из signing/pia-signing.keychain-db; если её нет — ad-hoc (права будут сбрасываться)
+# рантайм: копия Node под именем «pia» внутри бандла. Служба, CLI и работяги запускаются этим бинарём, поэтому в Терминале
+# («прервет процесс pia»), Мониторинге системы и Системных настройках (Запись экрана, Доступ к диску) вместо «node» видно «pia».
+# Берётся тот Node, с которым стоят node_modules: PIA_NODE, иначе ~/.local/share/pi-node/current/bin/node, иначе node из PATH.
+NODE_SRC=${PIA_NODE:-}
+[ -x "$NODE_SRC" ] || NODE_SRC=$HOME/.local/share/pi-node/current/bin/node
+[ -x "$NODE_SRC" ] || NODE_SRC=$(command -v node || true)
+if [ -x "$NODE_SRC" ]; then
+  NODE_SRC=$(python3 -c 'import os,sys;print(os.path.realpath(sys.argv[1]))' "$NODE_SRC")
+  cp -f "$NODE_SRC" $APP/Contents/MacOS/pia
+  chmod 755 $APP/Contents/MacOS/pia
+  echo "рантайм: $NODE_SRC ($($APP/Contents/MacOS/pia -v)) → pia.app/Contents/MacOS/pia"
+else
+  echo "⚠ node не найден — рантайм pia в бандл не положен (служба будет работать через обычный node)"
+fi
+# подпись: постоянная личность из signing/pia-signing.keychain-db; если её нет — ad-hoc (права будут сбрасываться).
+# Рантайм подписывается отдельно (codesign --deep не используем), тем же идентификатором и сертификатом, затем бандл.
+# Без hardened runtime у рантайма: Node'у нужен JIT, а подпись самоподписанная — нотаризации всё равно нет.
 KC=$PWD/signing/pia-signing.keychain-db
 PW=$(signing_password || true)
 if [ -f "$KC" ] && [ -n "$PW" ] && security unlock-keychain -p "$PW" "$KC" 2>/dev/null; then
   ID=$(security find-identity -p codesigning "$KC" | awk '/pia local signing/{print $2; exit}')
+  [ -x $APP/Contents/MacOS/pia ] && codesign --force --entitlements Resources/pia.entitlements --keychain "$KC" -s "$ID" -i com.pi-agent.chat $APP/Contents/MacOS/pia
   codesign --force --options runtime --entitlements Resources/pia.entitlements --keychain "$KC" -s "$ID" -i com.pi-agent.chat $APP
 else
   echo "нет signing/pia-signing.keychain-db — подписываю ad-hoc"
+  [ -x $APP/Contents/MacOS/pia ] && codesign --force --entitlements Resources/pia.entitlements -s - -i com.pi-agent.chat $APP/Contents/MacOS/pia
   codesign --force --options runtime --entitlements Resources/pia.entitlements -s - -i com.pi-agent.chat $APP
 fi
 codesign -dvv $APP 2>&1 | grep -E "Identifier|Authority|Signature" || true

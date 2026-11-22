@@ -27,10 +27,25 @@ die()  { printf '  ✗ %s\n' "$*"; exit 1; }
 # do: в режиме --check только сообщает; иначе выполняет
 do_() { if [ "$DRY" = 1 ]; then todo "(проверка) было бы: $*"; return 0; fi; "$@"; }
 
+# Рантайм pia: копия Node с именем «pia» внутри pia.app (его кладёт mac-app/build.sh). Служба, CLI и работяги запускаются им —
+# в Терминале, Мониторинге и Системных настройках видно «pia», а не «node». Нет бандла (окно не собрано) — обычный Node.
+runtime() {
+  if [ -x "$HOME/Applications/pia.app/Contents/MacOS/pia" ]; then echo "$HOME/Applications/pia.app/Contents/MacOS/pia"; else echo "$HOME/.local/share/pi-node/current/bin/node"; fi
+}
+write_wrapper() {  # $1 — файл, $2 — аргументы после agent.mjs
+  cat > "$1" <<WRAP
+#!/bin/sh
+export NODE_NO_WARNINGS=1
+R="\$HOME/Applications/pia.app/Contents/MacOS/pia"
+[ -x "\$R" ] || R="\$HOME/.local/share/pi-node/current/bin/node"
+exec "\$R" "\$HOME/.pi-agent/agent.mjs" $2"\$@"
+WRAP
+  chmod +x "$1"
+}
 render_plists() {  # $1 — папка назначения
   mkdir -p "$1"
   for n in server memory chat; do
-    sed "s|__HOME__|$HOME|g" "$ROOT/launchd/com.pi-agent.$n.plist.template" > "$1/com.pi-agent.$n.plist" || return 1
+    sed -e "s|__HOME__|$HOME|g" -e "s|__RUNTIME__|$(runtime)|g" "$ROOT/launchd/com.pi-agent.$n.plist.template" > "$1/com.pi-agent.$n.plist" || return 1
   done
 }
 if [ -n "$RENDER" ]; then render_plists "$RENDER" && echo "plist сгенерированы в $RENDER"; exit $?; fi
@@ -72,7 +87,7 @@ done
 
 # ── уже установлено? ──
 if [ "$UPDATE" = 0 ] && [ -f "$ROOT/node_modules/.package-lock.json" ] && [ -x "$NODE" ] && [ -x "$BIN/pia" ] \
-   && loaded com.pi-agent.server && [ -d "$APP" ] && loaded com.pi-agent.chat; then
+   && loaded com.pi-agent.server && [ -d "$APP" ] && [ -x "$APP/Contents/MacOS/pia" ] && loaded com.pi-agent.chat; then
   step "pia уже установлено"
   ok "служба com.pi-agent.server и окно com.pi-agent.chat работают"
   ALREADY=1
@@ -134,26 +149,12 @@ fi
 
 # ── 4. команда pia ──
 step "4. Команда pia"
-if [ -x "$BIN/pia" ] && grep -q 'agent.mjs' "$BIN/pia"; then ok "$BIN/pia на месте"; else
-  if [ "$DRY" = 1 ]; then todo "создал бы $BIN/pia"; else
-    cat > "$BIN/pia" <<'WRAP'
-#!/bin/sh
-export NODE_NO_WARNINGS=1
-exec "$HOME/.local/share/pi-node/current/bin/node" "$HOME/.pi-agent/agent.mjs" "$@"
-WRAP
-    chmod +x "$BIN/pia"; ok "создан $BIN/pia"
-  fi
-fi
-# вход к провайдеру без отдельной программы pi: тот же ~/.pi/agent/auth.json
-# pia-login = то же меню выбора провайдера, что и `pia login` (agent.mjs → login.mjs)
-if [ ! -x "$BIN/pia-login" ] || ! grep -q 'agent.mjs' "$BIN/pia-login"; then
-  if [ "$DRY" = 1 ]; then todo "создал бы $BIN/pia-login"; else
-    cat > "$BIN/pia-login" <<'WRAP'
-#!/bin/sh
-export NODE_NO_WARNINGS=1
-exec "$HOME/.local/share/pi-node/current/bin/node" "$HOME/.pi-agent/agent.mjs" login "$@"
-WRAP
-    chmod +x "$BIN/pia-login"; ok "создан $BIN/pia-login (открывает выбор провайдера)"
+# обёртки запускают рантайм из pia.app (имя процесса «pia»); обновляются и у тех, у кого стояли старые (с node)
+if [ -x "$BIN/pia" ] && grep -q 'pia.app' "$BIN/pia" && [ -x "$BIN/pia-login" ] && grep -q 'pia.app' "$BIN/pia-login"; then ok "$BIN/pia и pia-login на месте"; else
+  if [ "$DRY" = 1 ]; then todo "создал бы $BIN/pia и $BIN/pia-login"; else
+    # pia-login = то же меню выбора провайдера, что и `pia login` (agent.mjs → login.mjs); тот же ~/.pi/agent/auth.json
+    write_wrapper "$BIN/pia" ""; write_wrapper "$BIN/pia-login" "login "
+    ok "созданы $BIN/pia и $BIN/pia-login (pia-login открывает выбор провайдера)"
   fi
 fi
 if grep -qs '\.local/bin' "$HOME/.zshrc"; then ok "~/.local/bin уже в PATH (.zshrc)"; else
@@ -162,24 +163,8 @@ if grep -qs '\.local/bin' "$HOME/.zshrc"; then ok "~/.local/bin уже в PATH (
   fi
 fi
 
-# ── 5. службы ──
-step "5. Службы (LaunchAgents)"
-TMPL=$(mktemp -d); render_plists "$TMPL" || die "не удалось сгенерировать plist"
-mkdir -p "$LAB"
-for n in server memory; do
-  L=com.pi-agent.$n
-  if loaded $L; then ok "$L уже загружена"; continue; fi
-  if [ -f "$LAB/$L.plist" ]; then warn "$LAB/$L.plist есть, но не загружен — загружаю существующий"; else
-    do_ cp "$TMPL/$L.plist" "$LAB/$L.plist"
-  fi
-  if [ "$DRY" = 1 ]; then todo "launchctl bootstrap $L"; else
-    launchctl bootstrap "gui/$UID_" "$LAB/$L.plist" 2>/dev/null && ok "$L запущена" || warn "$L не загрузилась (launchctl bootstrap)"
-  fi
-done
-rm -rf "$TMPL"
-
-# ── 6. окно ──
-step "6. Окно pia.app"
+# ── 5. окно и рантайм ──
+step "5. Окно pia.app и рантайм pia"
 SIGN="$ROOT/mac-app/signing"; KC="$SIGN/pia-signing.keychain-db"
 if [ -f "$KC" ]; then ok "сертификат подписи есть"; else
   if [ "$DRY" = 1 ]; then todo "создал бы сертификат «pia local signing» и отдельную связку ключей (пароль — в Связке ключей macOS, служба pia-signing)"; else
@@ -210,7 +195,7 @@ CNF
     unset PW
   fi
 fi
-if [ -d "$APP" ] && loaded com.pi-agent.chat && [ "$UPDATE" = 0 ]; then ok "pia.app установлено, агент окна загружен"; else
+if [ -d "$APP" ] && [ -x "$APP/Contents/MacOS/pia" ] && loaded com.pi-agent.chat && [ "$UPDATE" = 0 ]; then ok "pia.app установлено, агент окна загружен"; else
   if [ "$SDKOK" = 0 ]; then warn "окно пропущено (нет SDK)"; elif [ "$DRY" = 1 ]; then todo "собрал бы окно (mac-app/build.sh) и поставил в ~/Applications/pia.app"; else
     echo "  … сборка окна (несколько минут)"
     if (cd "$ROOT/mac-app" && timeout 1500 ./build.sh >"$ROOT/mac-app/build.log" 2>&1); then ok "окно собрано и установлено (~/Applications/pia.app)"; else
@@ -218,6 +203,30 @@ if [ -d "$APP" ] && loaded com.pi-agent.chat && [ "$UPDATE" = 0 ]; then ok "pia.
     fi
   fi
 fi
+# ── 6. службы ──
+step "6. Службы (LaunchAgents)"
+TMPL=$(mktemp -d); render_plists "$TMPL" || die "не удалось сгенерировать plist"
+mkdir -p "$LAB"
+for n in server memory; do
+  L=com.pi-agent.$n
+  if loaded $L; then
+    ok "$L уже загружена"
+    # миграция со старой схемы (служба запускала node напрямую): новый plist кладём рядом, применяется после перезапуска службы
+    if [ "$UPDATE" = 1 ] && [ "$DRY" = 0 ] && [ -x "$(runtime)" ] && ! grep -q 'pia.app' "$LAB/$L.plist" 2>/dev/null; then
+      cp "$LAB/$L.plist" "$LAB/$L.plist.before-runtime" && cp "$TMPL/$L.plist" "$LAB/$L.plist"
+      warn "$L: plist обновлён (запуск через pia.app); применится после: launchctl bootout gui/$UID_/$L; launchctl bootstrap gui/$UID_ $LAB/$L.plist"
+    fi
+    continue
+  fi
+  if [ -f "$LAB/$L.plist" ]; then warn "$LAB/$L.plist есть, но не загружен — загружаю существующий"; else
+    do_ cp "$TMPL/$L.plist" "$LAB/$L.plist"
+  fi
+  if [ "$DRY" = 1 ]; then todo "launchctl bootstrap $L"; else
+    launchctl bootstrap "gui/$UID_" "$LAB/$L.plist" 2>/dev/null && ok "$L запущена" || warn "$L не загрузилась (launchctl bootstrap)"
+  fi
+done
+rm -rf "$TMPL"
+
 fi  # ALREADY=0
 
 # ── итог ──

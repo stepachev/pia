@@ -67,7 +67,7 @@ export async function lockHolder() {
   let pid = 0; try { pid = Number(fs.readFileSync(`${APP}/agent.lock`, "utf8")); } catch {}
   if (!pid || !alive(pid)) return null;
   const cmd = await cmdOf(pid);
-  if (!/node/.test(cmd)) return null;
+  if (!/node|MacOS\/pia /.test(cmd)) return null;
   return { pid, daemon: /daemon\.mjs/.test(cmd) };
 }
 

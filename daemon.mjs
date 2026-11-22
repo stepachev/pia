@@ -19,7 +19,7 @@ const cmdOf = (pid) => { try { return execFileSync("ps", ["-o", "command=", "-p"
 let waitedSince = 0;
 for (;;) {
   let pid = 0; try { pid = Number(fs.readFileSync(LOCK, "utf8")); } catch {}
-  if (!pid || pid === process.pid || !alive(pid) || !/node/.test(cmdOf(pid))) break;
+  if (!pid || pid === process.pid || !alive(pid) || !/node|MacOS\/pia /.test(cmdOf(pid))) break;
   if (!waitedSince) { waitedSince = Date.now(); log(`жду: разговор держит процесс ${pid} (${cmdOf(pid).slice(0, 120)})`); }
   await new Promise((r) => setTimeout(r, 2000));
 }
