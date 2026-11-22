@@ -141,10 +141,11 @@ else
   fi
 fi
 mkdir -p "$ROOT/pia" 2>/dev/null
-# пути в mcp.json жёстко прописаны под первого владельца — подставляем свой дом
-if grep -q '/Users/stpchv' "$ROOT/mcp.json" 2>/dev/null && [ "$HOME" != /Users/stpchv ]; then
+# пути в mcp.json могут быть прописаны под другого владельца — подставляем свой дом
+OLD_HOME=$(grep -oE -m1 '/Users/[^/"]+' "$ROOT/mcp.json" 2>/dev/null | head -1)
+if [ -n "$OLD_HOME" ] && [ "$OLD_HOME" != "$HOME" ]; then
   if [ "$DRY" = 1 ]; then todo "поправил бы пути в mcp.json на $HOME"; else
-    sed -i '' "s|/Users/stpchv|$HOME|g" "$ROOT/mcp.json" && git -C "$ROOT" update-index --skip-worktree mcp.json 2>/dev/null
+    sed -i '' "s|$OLD_HOME/|$HOME/|g" "$ROOT/mcp.json" && git -C "$ROOT" update-index --skip-worktree mcp.json 2>/dev/null
     ok "mcp.json: пути под $HOME"
   fi
 fi
