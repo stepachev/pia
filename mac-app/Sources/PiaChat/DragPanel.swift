@@ -13,7 +13,11 @@ final class DragPanel {
     private var started = Date()
     private var seenSettings = false
     private var waitForSettings = false   // системный диалог: ждём, пока пользователь сам откроет настройки
-    private let size = NSSize(width: 340, height: 84)
+    private let size = NSSize(width: 400, height: 96)
+    private var titleLabel: NSTextField?
+    private var hintLabel: NSTextField?
+    private var arrowView: NSImageView?
+    private var arrowName: String?
 
     static let settingsIds = ["com.apple.systempreferences"]
 
@@ -25,6 +29,11 @@ final class DragPanel {
         seenSettings = false
         waitForSettings = !explicit
         if panel == nil { panel = makePanel() }
+        if kind == .screen {
+            setTexts(title: "Разрешите запись экрана", hint: "Перетащите значок pia в список и включите переключатель")
+        } else {
+            setTexts(title: "Разрешите универсальный доступ", hint: "Перетащите значок pia в список и включите переключатель")
+        }
         panel?.orderOut(nil)
         timer?.invalidate()
         let t = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in
@@ -61,7 +70,7 @@ final class DragPanel {
         } else if waitForSettings {
             panel?.orderOut(nil); return
         }
-        if panel?.isVisible != true { panel?.orderFrontRegardless() }
+        showPanel()
     }
 
     // MARK: окно Системных настроек
@@ -87,26 +96,72 @@ final class DragPanel {
         guard let panel else { return }
         let screen = NSScreen.screens.first { $0.frame.intersects(f) } ?? NSScreen.main ?? NSScreen.screens[0]
         let vis = screen.visibleFrame
-        let gap: CGFloat = 8
-        var o = NSPoint(x: f.midX - size.width / 2, y: f.minY - size.height - gap)     // под окном
+        let gap: CGFloat = 12
+        var arrow: String? = "arrow.up"
+        var o = NSPoint(x: f.midX - size.width / 2, y: f.minY - size.height - gap)     // под окном по центру
         if o.y < vis.minY {
-            o = NSPoint(x: f.maxX + gap, y: f.minY)                                    // справа
+            arrow = "arrow.left"
+            o = NSPoint(x: f.maxX + gap, y: f.midY - size.height / 2)                  // справа
             if o.x + size.width > vis.maxX {
-                o = NSPoint(x: f.midX - size.width / 2, y: f.minY + 12)                // поверх нижнего края окна
+                arrow = "arrow.right"
+                o = NSPoint(x: f.minX - size.width - gap, y: f.midY - size.height / 2) // слева
+                if o.x < vis.minX { arrow = nil; o = NSPoint(x: f.midX - size.width / 2, y: f.minY + 12) }
             }
         }
         o.x = min(max(o.x, vis.minX + 4), vis.maxX - size.width - 4)
         o.y = min(max(o.y, vis.minY + 4), vis.maxY - size.height - 4)
+        setArrow(arrow)
         if panel.frame.origin != o { panel.setFrameOrigin(o) }
     }
 
     private func placeInCorner() {
         guard let panel, let s = NSScreen.screens.first else { return }
         let v = s.visibleFrame
+        setArrow(nil)
         panel.setFrameOrigin(NSPoint(x: v.maxX - size.width - 20, y: v.minY + 20))
     }
 
     // MARK: вид
+
+    func setTexts(title: String, hint: String) {
+        titleLabel?.stringValue = title
+        hintLabel?.stringValue = hint
+    }
+
+    /// Стрелка в сторону окна настроек: nil — окно не найдено или панель поверх него (стрелка скрыта).
+    private func setArrow(_ name: String?) {
+        guard let arrowView else { return }
+        guard let name else { arrowView.isHidden = true; return }
+        if arrowName != name {
+            arrowName = name
+            let cfg = NSImage.SymbolConfiguration(pointSize: 13, weight: .semibold)
+            arrowView.image = NSImage(systemSymbolName: name, accessibilityDescription: nil)?.withSymbolConfiguration(cfg)
+        }
+        arrowView.isHidden = false
+    }
+
+    /// Плавное появление: alpha 0→1 и масштаб 0.96→1 за 0,2 с.
+    private func showPanel() {
+        guard let panel, !panel.isVisible else { return }
+        panel.alphaValue = 0
+        panel.orderFrontRegardless()
+        if let layer = panel.contentView?.layer {
+            let cx = size.width / 2, cy = size.height / 2
+            var t = CATransform3DMakeTranslation(cx, cy, 0)
+            t = CATransform3DScale(t, 0.96, 0.96, 1)
+            t = CATransform3DTranslate(t, -cx, -cy, 0)
+            let a = CABasicAnimation(keyPath: "transform")
+            a.fromValue = NSValue(caTransform3D: t)
+            a.toValue = NSValue(caTransform3D: CATransform3DIdentity)
+            a.duration = 0.2
+            a.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            layer.add(a, forKey: "appear")
+        }
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.2
+            panel.animator().alphaValue = 1
+        }
+    }
 
     private func makePanel() -> NSPanel {
         let p = NSPanel(contentRect: NSRect(origin: .zero, size: size),
@@ -122,28 +177,56 @@ final class DragPanel {
         p.isReleasedWhenClosed = false
 
         let fx = NSVisualEffectView(frame: NSRect(origin: .zero, size: size))
-        fx.material = .popover
+        fx.material = .hudWindow
+        fx.blendingMode = .behindWindow
         fx.state = .active
         fx.wantsLayer = true
         fx.layer?.cornerRadius = 16
+        fx.layer?.cornerCurve = .continuous
         fx.layer?.masksToBounds = true
         fx.layer?.borderWidth = 0.5
         fx.layer?.borderColor = NSColor.separatorColor.cgColor
 
-        let icon = DragIconView(frame: NSRect(x: 14, y: 14, width: 56, height: 56))
+        let pad: CGFloat = 16, iconSize: CGFloat = 64
+        let icon = DragIconView(frame: NSRect(x: pad, y: (size.height - iconSize) / 2, width: iconSize, height: iconSize))
         fx.addSubview(icon)
 
-        let label = NSTextField(wrappingLabelWithString: "Перетащите pia в список и включите переключатель")
-        label.font = .systemFont(ofSize: 13, weight: .medium)
-        label.textColor = .labelColor
-        label.frame = NSRect(x: 82, y: 14, width: size.width - 82 - 34, height: 56)
-        label.maximumNumberOfLines = 3
-        fx.addSubview(label)
+        let tx = pad + iconSize + 14
+        let tw = size.width - tx - pad - 14
+        let title = NSTextField(labelWithString: "")
+        title.font = .systemFont(ofSize: 13, weight: .semibold)
+        title.textColor = .labelColor
+        title.lineBreakMode = .byTruncatingTail
+        title.frame = NSRect(x: tx, y: size.height - pad - 17, width: tw, height: 17)
+        fx.addSubview(title)
+        titleLabel = title
 
-        let close = NSButton(frame: NSRect(x: size.width - 28, y: size.height - 28, width: 18, height: 18))
+        let hint = NSTextField(wrappingLabelWithString: "")
+        hint.font = .systemFont(ofSize: 12)
+        hint.textColor = .secondaryLabelColor
+        hint.maximumNumberOfLines = 3
+        hint.frame = NSRect(x: tx, y: pad, width: tw, height: size.height - pad * 2 - 17 - 3)
+        fx.addSubview(hint)
+        hintLabel = hint
+
+        let arrow = NSImageView(frame: NSRect(x: size.width - pad - 14, y: pad - 1, width: 16, height: 16))
+        arrow.contentTintColor = .tertiaryLabelColor
+        arrow.imageScaling = .scaleProportionallyDown
+        arrow.isHidden = true
+        arrow.wantsLayer = true
+        let pulse = CABasicAnimation(keyPath: "opacity")
+        pulse.fromValue = 1.0; pulse.toValue = 0.3
+        pulse.duration = 0.9; pulse.autoreverses = true; pulse.repeatCount = .infinity
+        pulse.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        arrow.layer?.add(pulse, forKey: "pulse")
+        fx.addSubview(arrow)
+        arrowView = arrow
+
+        let close = NSButton(frame: NSRect(x: size.width - 14 - 12, y: size.height - 12 - 14, width: 14, height: 14))
         close.isBordered = false
+        close.imageScaling = .scaleProportionallyDown
         close.image = NSImage(systemSymbolName: "xmark.circle.fill", accessibilityDescription: "Закрыть")
-        close.contentTintColor = .tertiaryLabelColor
+        close.contentTintColor = .secondaryLabelColor
         close.target = self
         close.action = #selector(closeTapped)
         fx.addSubview(close)
@@ -155,32 +238,57 @@ final class DragPanel {
     @objc private func closeTapped() { close("закрыта кнопкой") }
 }
 
-/// Значок pia.app: перетаскивается как файл-приложение (в список разрешений Системных настроек).
+/// Значок приложения: перетаскивается как файл-приложение (в список разрешений Системных настроек).
 final class DragIconView: NSView, NSDraggingSource {
     private var downAt: NSPoint?
+    private var hover = false
+    private var dragging = false
 
     override init(frame: NSRect) {
         super.init(frame: frame)
         toolTip = "Перетащите в список"
+        addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self, userInfo: nil))
     }
     required init?(coder: NSCoder) { fatalError() }
 
     private var icon: NSImage { NSWorkspace.shared.icon(forFile: Bundle.main.bundleURL.path) }
 
-    override func draw(_ dirtyRect: NSRect) { icon.draw(in: bounds) }
+    override func draw(_ dirtyRect: NSRect) {
+        let plate = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: 14, yRadius: 14)
+        NSColor.labelColor.withAlphaComponent(dragging ? 0.14 : hover ? 0.10 : 0.06).setFill()
+        plate.fill()
+        NSColor.separatorColor.setStroke()
+        plate.lineWidth = 1
+        plate.stroke()
+        icon.draw(in: bounds.insetBy(dx: 4, dy: 4))
+    }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     override var mouseDownCanMoveWindow: Bool { false }
-    override func resetCursorRects() { addCursorRect(bounds, cursor: .openHand) }
+    override func resetCursorRects() { addCursorRect(bounds, cursor: dragging ? .closedHand : .openHand) }
+    override func mouseEntered(with event: NSEvent) { hover = true; needsDisplay = true }
+    override func mouseExited(with event: NSEvent) { hover = false; needsDisplay = true }
 
-    override func mouseDown(with event: NSEvent) { downAt = event.locationInWindow }
+    override func mouseDown(with event: NSEvent) {
+        downAt = event.locationInWindow
+        dragging = true; needsDisplay = true
+        NSCursor.closedHand.set()
+    }
+    override func mouseUp(with event: NSEvent) { endDrag() }
+
+    private func endDrag() {
+        dragging = false; needsDisplay = true
+        window?.invalidateCursorRects(for: self)
+        NSCursor.openHand.set()
+    }
 
     override func mouseDragged(with event: NSEvent) {
         guard let d = downAt, hypot(event.locationInWindow.x - d.x, event.locationInWindow.y - d.y) > 3 else { return }
         downAt = nil
         let item = NSDraggingItem(pasteboardWriter: Bundle.main.bundleURL as NSURL)
-        item.setDraggingFrame(bounds, contents: icon)
+        item.setDraggingFrame(bounds.insetBy(dx: 4, dy: 4), contents: icon)
         beginDraggingSession(with: [item], event: event, source: self)
     }
 
     func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation { .copy }
+    func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) { endDrag() }
 }
