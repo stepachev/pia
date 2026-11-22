@@ -68,7 +68,7 @@ MACV=$(sw_vers -productVersion); MAJOR=${MACV%%.*}
 [ "$MAJOR" -ge 13 ] 2>/dev/null || die "macOS $MACV слишком старая (нужна 13+)"
 ARCH=$(uname -m)
 ok "macOS $MACV, $ARCH"
-[ "$ROOT" = "$HOME/.pi-agent" ] || die "репозиторий должен лежать в ~/.pi-agent (сейчас $ROOT). Выполни: gh repo clone stepachev/pia-private ~/.pi-agent"
+[ "$ROOT" = "$HOME/.pi-agent" ] || die "репозиторий должен лежать в ~/.pi-agent (сейчас $ROOT). Выполни: git clone https://github.com/stepachev/pia.git ~/.pi-agent"
 
 if ! xcode-select -p >/dev/null 2>&1 || ! xcrun --find swift >/dev/null 2>&1; then
   if [ "$DRY" = 1 ]; then todo "нет Command Line Tools — запустил бы xcode-select --install"; else

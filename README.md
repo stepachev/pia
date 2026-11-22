@@ -1,12 +1,12 @@
 # pia
 
-Личный ИИ-помощник на Mac: фоновая служба (Node.js + Pi Durable; модели — любого провайдера, который поддерживает pi, по умолчанию Claude), команда `pia` в терминале и окно `pia.app` (автозапуск, двойной правый Shift). Репозиторий приватный: github.com/stepachev/pia-private.
+Личный ИИ-помощник на Mac: фоновая служба (Node.js + Pi Durable; модели — любого провайдера, который поддерживает pi, по умолчанию Claude), команда `pia` в терминале и окно `pia.app` (автозапуск, двойной правый Shift). Репозиторий публичный: github.com/stepachev/pia.
 
 ## Установка (одна команда)
 ```
-gh repo clone stepachev/pia-private ~/.pi-agent && ~/.pi-agent/install.sh
+git clone https://github.com/stepachev/pia.git ~/.pi-agent && ~/.pi-agent/install.sh
 ```
-Нужен `gh auth login` (репозиторий приватный). Без gh: `git clone https://github.com/stepachev/pia-private.git ~/.pi-agent` (спросит вход GitHub), затем `~/.pi-agent/install.sh`.
+Вход в GitHub для установки не нужен (сохранять изменения в репозиторий может только владелец).
 Установщик идемпотентный: ставит Command Line Tools (если нет — попросит дождаться и запустить снова), Node 22 LTS, зависимости, команды `pia` и `pia-login`, службы LaunchAgents из `launchd/*.plist.template`, сертификат подписи, собирает и ставит окно. Если уже установлено — только сообщит. `./install.sh --check` — показать, что будет сделано, ничего не меняя; `./install.sh --update` — обновить код и окно.
 
 ## Провайдеры и модели
