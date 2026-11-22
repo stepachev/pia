@@ -114,30 +114,11 @@ final class Permissions {
 
     /// Кнопка «Разрешить»: в первый раз — штатный запрос macOS, потом — нужный раздел Системных настроек.
     func request(_ kind: Kind) {
-        let key = Self.promptedKey + kind.rawValue
-        let prompted = UserDefaults.standard.bool(forKey: key)
         asked.insert(kind)
         switch kind {
-        case .accessibility:
-            if prompted { openSettings(kind) } else {
-                UserDefaults.standard.set(true, forKey: key)
-                Log.write("разрешения: системный запрос «Универсальный доступ»")
-                _ = AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary)
-                DragPanel.shared.show(.accessibility, explicit: false)   // если откроют настройки из системного окна
-            }
-        case .screen:
-            if prompted { openSettings(kind) } else {
-                UserDefaults.standard.set(true, forKey: key)
-                Log.write("разрешения: системный запрос «Запись экрана»")
-                // macOS показывает этот запрос один раз за всё время; без ответа «да» — сразу false
-                DragPanel.shared.show(.screen, explicit: false)
-                if !CGRequestScreenCaptureAccess() {
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
-                        guard let self, !self.screen, NSApp.isActive else { return }
-                        self.openSettings(kind)   // запрос не появился (уже отвечали) — сразу в настройки
-                    }
-                }
-            }
+        case .accessibility, .screen:
+            // одна кнопка: сразу нужный раздел Системных настроек + панель со значком pia для перетаскивания
+            openSettings(kind)
         case .browsers:
             let pending = browsers.filter { $0.state == .notAsked }
             if pending.isEmpty { openSettings(kind); return }

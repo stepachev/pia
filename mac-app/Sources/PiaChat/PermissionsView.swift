@@ -33,7 +33,8 @@ struct PermissionsView: View {
                         settings: { perms.openSettings(.accessibility) },
                         hint: perms.asked.contains(.accessibility) && !perms.accessibility
                             ? "В списке включите переключатель напротив pia (macOS может спросить пароль). Уже включён, а здесь всё ещё «Выключено» — перезапустите pia." : nil,
-                        restart: perms.asked.contains(.accessibility) && !perms.accessibility ? { perms.relaunch() } : nil)
+                        restart: perms.asked.contains(.accessibility) && !perms.accessibility ? { perms.relaunch() } : nil,
+                        showSettingsButton: false)
 
                     PermissionCard(
                         icon: "camera.viewfinder", title: "Запись экрана", tag: "необязательно",
@@ -44,7 +45,8 @@ struct PermissionsView: View {
                         settings: { perms.openSettings(.screen) },
                         hint: perms.asked.contains(.screen) && !perms.screen
                             ? "В списке включите переключатель напротив pia. macOS применяет это разрешение только после перезапуска программы — если включили, нажмите «Перезапустить pia»." : nil,
-                        restart: perms.asked.contains(.screen) && !perms.screen ? { perms.relaunch() } : nil)
+                        restart: perms.asked.contains(.screen) && !perms.screen ? { perms.relaunch() } : nil,
+                        showSettingsButton: false)
 
                     PermissionCard(
                         icon: "safari", title: "Доступ к браузерам", tag: "необязательно",
@@ -117,6 +119,7 @@ struct PermissionCard: View {
     var settings: () -> Void
     var hint: String?
     var restart: (() -> Void)?
+    var showSettingsButton = true
     var extra: AnyView? = nil
     var footnote: String? = nil
 
@@ -147,7 +150,7 @@ struct PermissionCard: View {
                 if showButtons {
                     HStack(spacing: 8) {
                         if let primary { PillButton(title: primary.0, primary: true, action: primary.1) }
-                        PillButton(title: "Открыть настройки", primary: false, action: settings)
+                        if showSettingsButton { PillButton(title: "Открыть настройки", primary: false, action: settings) }
                         if let restart { PillButton(title: "Перезапустить pia", primary: false, action: restart) }
                     }
                     .padding(.top, 2)
