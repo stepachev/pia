@@ -229,11 +229,7 @@ struct GrabStrip: NSViewRepresentable {
 }
 
 final class GrabStripView: NSView {
-    /// все хваты (слабые ссылки): текст ленты под хватом не ставит свой курсор (MessageText)
-    static let all = NSHashTable<GrabStripView>.weakObjects()
     private var dragging = false
-    override init(frame: NSRect) { super.init(frame: frame); Self.all.add(self) }
-    required init?(coder: NSCoder) { fatalError() }
     override var mouseDownCanMoveWindow: Bool { false }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     override func resetCursorRects() { addCursorRect(bounds, cursor: dragging ? .closedHand : .openHand) }

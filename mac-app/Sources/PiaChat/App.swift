@@ -1,18 +1,20 @@
 import AppKit
 import SwiftUI
 
-// Окно pia: borderless — без заголовка и светофора, непрозрачный фон (белый / тёмный, как Raycast AI Chat), перетаскивается за
-// область-хват сверху и пустой фон, меняет размер за край. Рамка окна = видимая карточка (без прозрачных полей): вне карточки окно
-// мышь не ловит. Скругление 24 pt — у слоя contentView (masksToBounds), тень — системная (hasShadow) по форме скруглённой карточки.
+// Окно pia: borderless — без заголовка и светофора, непрозрачный фон (белый / тёмный, как Raycast AI Chat), перетаскивается за фон, меняет размер.
+// Тень своя (мягкая, как у плавающих окон macOS/Raycast): системная тень активного окна тяжёлая и с тёмным ободком. Поэтому окно
+// шире карточки на `margin` со всех сторон; поля под тенью пропускают щелчки (ignoresMouseEvents), размер меняется за край карточки.
 final class PiaPanel: NSPanel {
+    static let margin: CGFloat = 40   // поле под тень: мягкая тень (σ 14 ≈ blur 28) + смещение 11 вниз гаснет до края окна
     var onCancel: () -> Void = {}
     var onResized: () -> Void = {}
     /// мышь (щелчок/наведение) в окне, когда pia не активна — сделать активной (иначе курсор и наведение «видит» приложение позади)
     var onMouseWhileInactive: (String) -> Void = { _ in }
 
     init() {
+        let m = PiaPanel.margin
         let card = PiaPanel.savedSize()
-        super.init(contentRect: NSRect(origin: .zero, size: card),
+        super.init(contentRect: NSRect(origin: .zero, size: NSSize(width: card.width + 2 * m, height: card.height + 2 * m)),
                    // nonactivatingPanel: окно становится key и принимает ввод сразу, даже если macOS отложила/не дала
                    // активацию приложения (вызов из фона двойным правым Shift) — как у Spotlight/Raycast
                    // borderless (без .titled): у окна нет заголовка и кнопок-«светофора» вовсе — macOS не может их
@@ -24,13 +26,13 @@ final class PiaPanel: NSPanel {
         isMovableByWindowBackground = true
         isOpaque = false
         backgroundColor = .clear
-        hasShadow = true           // системная тень по альфе окна: прозрачные скруглённые углы — тень скруглённая
+        hasShadow = false          // тень рисует PiaShadowView
         acceptsMouseMovedEvents = true
         level = .floating
         hidesOnDeactivate = false
         isReleasedWhenClosed = false
         collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
-        minSize = NSSize(width: 460, height: 300)
+        minSize = NSSize(width: 460 + 2 * m, height: 300 + 2 * m)
         animationBehavior = .utilityWindow
     }
 
@@ -43,8 +45,8 @@ final class PiaPanel: NSPanel {
     }
     override func cancelOperation(_ sender: Any?) { onCancel() }
 
-    /// Видимая карточка в координатах экрана — это и есть рамка окна
-    var cardFrame: NSRect { frame }
+    /// Видимая карточка в координатах экрана
+    var cardFrame: NSRect { frame.insetBy(dx: Self.margin, dy: Self.margin) }
 
     func saveSize() {
         UserDefaults.standard.set(cardFrame.width, forKey: "pia.window.w")
@@ -293,18 +295,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let host = NSHostingView(rootView: root)
         host.sizingOptions = []
 
+        let m = PiaPanel.margin
         let container = PiaContainerView()
         container.onHover = { [weak self] in self?.panel.onMouseWhileInactive("наведение") }
+        let shadow = PiaShadowView()
         let bg = PiaBackgroundView()
         PiaDrop.model = model
         panel.registerForDraggedTypes(PiaDrop.types)
         let edges = ResizeEdgesView()
         edges.onEnd = { [weak self] in self?.panel.saveSize() }
-        bg.translatesAutoresizingMaskIntoConstraints = false; container.addSubview(bg)
+        for v in [shadow, bg] { v.translatesAutoresizingMaskIntoConstraints = false; container.addSubview(v) }
         for v in [host, edges] { v.translatesAutoresizingMaskIntoConstraints = false; bg.addSubview(v) }
         var cs: [NSLayoutConstraint] = []
-        cs += [bg.leadingAnchor.constraint(equalTo: container.leadingAnchor), bg.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-               bg.topAnchor.constraint(equalTo: container.topAnchor), bg.bottomAnchor.constraint(equalTo: container.bottomAnchor)]
+        for v in [shadow, bg] {
+            cs += [v.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: m),
+                   v.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -m),
+                   v.topAnchor.constraint(equalTo: container.topAnchor, constant: m),
+                   v.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -m)]
+        }
         for v in [host, edges] {
             cs += [v.leadingAnchor.constraint(equalTo: bg.leadingAnchor), v.trailingAnchor.constraint(equalTo: bg.trailingAnchor),
                    v.topAnchor.constraint(equalTo: bg.topAnchor), v.bottomAnchor.constraint(equalTo: bg.bottomAnchor)]
@@ -312,8 +320,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         NSLayoutConstraint.activate(cs)
         panel.contentView = container
         panel.center()
-        // ignoresMouseEvents не задаём: рамка окна = карточка (непрозрачная) — её мышь ловит целиком, а прозрачные
-        // уголки за скруглением macOS пропускает к окну позади (явное false ловило бы и их)
+
+        // окно перехватывает мышь целиком, пока видно: ignoresMouseEvents не трогаем (всегда false)
+        panel.ignoresMouseEvents = false
     }
 
     func show(source: String = "") {
@@ -324,6 +333,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             centerOnActiveScreen()
             panel.alphaValue = 0
         }
+        panel.ignoresMouseEvents = false
         shownAt = Date()
         perms.startWatching()
         if perms.shouldAutoShow && !perms.wizardVisible {
@@ -355,8 +365,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 panel.animator().alphaValue = 1
             }
             model.scrollToBottomToken += 1
-            // тень пересчитать по уже нарисованной скруглённой карточке
-            DispatchQueue.main.async { [weak self] in self?.panel.invalidateShadow() }
         }
         model.startPolling()
         if activity == nil {
@@ -409,7 +417,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // как Raycast: по центру, чуть выше середины
         let x = vf.midX - s.width / 2
         let y = vf.midY - s.height / 2 + vf.height * 0.06
-        panel.setFrameOrigin(NSPoint(x: round(x), y: round(min(y, vf.maxY - s.height))))   // верх карточки не выше рабочей области
+        panel.setFrameOrigin(NSPoint(x: round(x), y: round(min(y, vf.maxY - s.height + PiaPanel.margin))))
     }
 
     /// Двойное нажатие правого Shift: сначала снимаем контекст (пока впереди чужое приложение), потом показываем окно
@@ -434,7 +442,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func windowDidEndLiveResize(_ n: Notification) { panel.saveSize() }
-    func windowDidResize(_ n: Notification) { panel.invalidateShadow() }
 
     // Меню не видно (LSUIElement), но без него не работают ⌘C/⌘V/⌘A/⌘Z
     private func buildMenu() {
@@ -473,17 +480,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 /// Контейнер окна: наведение на карточку, когда pia не активна (tracking area .activeAlways — события идут и в неактивное окно)
 final class PiaContainerView: NSView {
     var onHover: () -> Void = {}
-    override init(frame: NSRect) {
-        super.init(frame: frame)
-        // форма окна: скругление 24 pt, всё за ним прозрачно — по этой альфе macOS строит тень и пропускает мышь в уголках
-        wantsLayer = true
-        layer?.cornerRadius = PiaBackgroundView.radius
-        layer?.cornerCurve = .continuous
-        layer?.masksToBounds = true
-        layer?.backgroundColor = NSColor.clear.cgColor
-    }
-    required init?(coder: NSCoder) { fatalError() }
-    override var isOpaque: Bool { false }
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
         for t in trackingAreas { removeTrackingArea(t) }
@@ -525,6 +521,38 @@ final class PiaBackgroundView: NSView {
     override func updateLayer() {
         layer?.backgroundColor = Self.fill(dark: isDark).cgColor
         layer?.borderColor = (isDark ? NSColor(white: 1, alpha: 0.09) : NSColor(white: 0, alpha: 0.07)).cgColor
+    }
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        needsDisplay = true
+    }
+}
+
+// Тень под карточкой (вместо системной): широкая мягкая + узкая контактная.
+final class PiaShadowView: NSView {
+    private let soft = CALayer(), contact = CALayer()
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        for l in [soft, contact] { layer?.addSublayer(l); l.shadowColor = NSColor.black.cgColor; l.masksToBounds = false }
+    }
+    required init?(coder: NSCoder) { fatalError() }
+    override var wantsUpdateLayer: Bool { true }
+    override var isOpaque: Bool { false }
+    private var isDark: Bool { effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua }
+    override func layout() {
+        super.layout()
+        let path = CGPath(roundedRect: bounds, cornerWidth: PiaBackgroundView.radius, cornerHeight: PiaBackgroundView.radius, transform: nil)
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        for l in [soft, contact] { l.frame = bounds; l.shadowPath = path }
+        CATransaction.commit()
+    }
+    override func updateLayer() {
+        let dark = isDark
+        // широкая мягкая (вниз) + близкая контактная; в тёмной теме сильнее, иначе на тёмном фоне не видно
+        // shadowRadius у CALayer ≈ половина «blur» из Figma/CSS: 14 ≈ blur 28, 2 ≈ blur 4
+        soft.shadowRadius = 14; soft.shadowOffset = CGSize(width: 0, height: -11); soft.shadowOpacity = dark ? 0.34 : 0.20
+        contact.shadowRadius = 2; contact.shadowOffset = CGSize(width: 0, height: -1); contact.shadowOpacity = dark ? 0.20 : 0.09
     }
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
