@@ -271,7 +271,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         host.sizingOptions = []
 
         let m = PiaPanel.margin
-        let container = NSView()
+        let container = LinkTrackingView()
         let shadow = PiaShadowView()
         let bg = PiaBackgroundView()
         PiaDrop.model = model
@@ -295,30 +295,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         panel.contentView = container
         panel.center()
 
-        // поля под тенью пропускают щелчки в окна позади
-        let mask: NSEvent.EventTypeMask = [.mouseMoved, .leftMouseUp, .rightMouseUp, .leftMouseDragged]
-        mouseMonitors = [
-            NSEvent.addGlobalMonitorForEvents(matching: mask) { [weak self] _ in MainActor.assumeIsolated { self?.updateMousePassThrough() } } as Any,
-            NSEvent.addLocalMonitorForEvents(matching: mask) { [weak self] e in self?.updateMousePassThrough(); return e } as Any,
-        ]
-        LinkCursor.install { [weak self] in self?.panel?.contentView }
-    }
-
-    private var mouseMonitors: [Any] = []
-
-    private func updateMousePassThrough() {
-        guard let panel, panel.isVisible else { return }
-        let inside = panel.cardFrame.insetBy(dx: -1, dy: -1).contains(NSEvent.mouseLocation)
-        if NSEvent.pressedMouseButtons != 0 {
-            // кнопка зажата: тянут что-то (в т. ч. миниатюру CleanShot из другого приложения) — над карточкой окно
-            // обязано принимать события, иначе drag «проваливается» в окно позади. Никогда не включаем пропуск во время нажатия.
-            if inside && panel.ignoresMouseEvents {
-                panel.ignoresMouseEvents = false
-                Log.write("drag над карточкой: пропуск мыши выключен")
-            }
-            return
-        }
-        if panel.ignoresMouseEvents == inside { panel.ignoresMouseEvents = !inside }
+        // окно перехватывает мышь целиком, пока видно: ignoresMouseEvents не трогаем (всегда false)
+        panel.ignoresMouseEvents = false
     }
 
     func show(source: String = "") {
@@ -329,6 +307,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             centerOnActiveScreen()
             panel.alphaValue = 0
         }
+        panel.ignoresMouseEvents = false
         shownAt = Date()
         perms.startWatching()
         if perms.shouldAutoShow && !perms.wizardVisible {
@@ -354,7 +333,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 Log.write("окно: key=\(self.panel.isKeyWindow), pia активна=\(NSApp.isActive)")
             }
         }
-        updateMousePassThrough()
         if !wasVisible {
             NSAnimationContext.runAnimationGroup { ctx in
                 ctx.duration = 0.14
