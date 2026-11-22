@@ -404,21 +404,9 @@ struct ReportBlock: View {
 
 struct TypingDots: View {
     var body: some View {
-        TimelineView(.animation) { ctx in
-            let t = ctx.date.timeIntervalSinceReferenceDate
-            HStack(spacing: 5) {
-                ForEach(0..<3) { i in
-                    let phase = (sin((t * 2 * .pi / 1.2) - Double(i) * 0.9) + 1) / 2
-                    Circle()
-                        .fill(Color.primary)
-                        .frame(width: 6, height: 6)
-                        .opacity(0.18 + 0.5 * phase)
-                        .scaleEffect(0.85 + 0.2 * phase)
-                }
-            }
-        }
-        .padding(.vertical, 6)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        HexDotsLoader()
+            .padding(.vertical, 6)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
