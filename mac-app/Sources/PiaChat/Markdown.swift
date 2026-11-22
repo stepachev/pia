@@ -134,8 +134,12 @@ struct MarkdownView: View, Equatable {
     let text: String
     var size: CGFloat = 13.5
     var secondary = false
+    /// false — текст не выделяется и не перехватывает мышь (свёрнутый отчёт раскрывается щелчком)
+    var selectable = true
 
-    static func == (a: MarkdownView, b: MarkdownView) -> Bool { a.text == b.text && a.size == b.size && a.secondary == b.secondary }
+    static func == (a: MarkdownView, b: MarkdownView) -> Bool {
+        a.text == b.text && a.size == b.size && a.secondary == b.secondary && a.selectable == b.selectable
+    }
 
     var body: some View {
         let blocks = MarkdownParser.parse(text)
@@ -152,35 +156,34 @@ struct MarkdownView: View, Equatable {
         Text(MarkdownParser.inline(s, size: sz ?? size))
     }
 
+    private var baseColor: NSColor { secondary ? .secondaryLabelColor : .labelColor }
+
+    /// Абзацы, заголовки, пункты, цитаты — NSTextView (курсор «рука» над ссылками), см. MessageText.swift
+    private func textBlock(_ s: String, size sz: CGFloat, weight: NSFont.Weight = .regular, color: NSColor? = nil, lineSpacing: CGFloat = 0) -> MessageText {
+        MessageText(text: MDAttr.make(s, size: sz, weight: weight, color: color ?? baseColor, lineSpacing: lineSpacing), selectable: selectable)
+    }
+
     @ViewBuilder private func block(_ b: MDBlock) -> some View {
         switch b {
         case .heading(let level, let s):
-            inline(s, level <= 1 ? size + 4 : level == 2 ? size + 2 : size + 0.5)
-                .font(.system(size: level <= 1 ? size + 4 : level == 2 ? size + 2 : size + 0.5, weight: .semibold))
+            textBlock(s, size: level <= 1 ? size + 4 : level == 2 ? size + 2 : size + 0.5, weight: .semibold)
                 .padding(.top, 4)
-                .fixedSize(horizontal: false, vertical: true)
         case .paragraph(let s):
-            inline(s)
-                .font(.system(size: size))
-                .lineSpacing(2.5)
-                .fixedSize(horizontal: false, vertical: true)
+            textBlock(s, size: size, lineSpacing: 2.5)
         case .listItem(let indent, let marker, let s):
             HStack(alignment: .firstTextBaseline, spacing: 7) {
                 Text(marker)
                     .font(.system(size: marker == "•" ? size : size - 0.5, weight: marker == "•" ? .regular : .medium).monospacedDigit())
                     .foregroundStyle(.secondary)
                     .frame(minWidth: 12, alignment: marker == "•" ? .center : .trailing)
-                inline(s)
-                    .font(.system(size: size))
-                    .lineSpacing(2.5)
-                    .fixedSize(horizontal: false, vertical: true)
+                textBlock(s, size: size, lineSpacing: 2.5)
+                    .alignmentGuide(.firstTextBaseline) { _ in MDAttr.baseline(size: size) }
             }
             .padding(.leading, CGFloat(indent) * 18)
         case .quote(let s):
             HStack(alignment: .top, spacing: 10) {
                 RoundedRectangle(cornerRadius: 1).fill(Color.primary.opacity(0.25)).frame(width: 2.5)
-                inline(s).font(.system(size: size)).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                textBlock(s, size: size, color: .secondaryLabelColor)
             }
             .fixedSize(horizontal: false, vertical: true)
         case .code(_, let s):
@@ -191,6 +194,7 @@ struct MarkdownView: View, Equatable {
                     .fixedSize(horizontal: true, vertical: true)
                     .padding(.horizontal, 12).padding(.vertical, 10)
             }
+            .modifier(SelectableIf(on: selectable))
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(Color.primary.opacity(0.06)))
             .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).strokeBorder(Color.primary.opacity(0.07)))
@@ -216,10 +220,19 @@ struct MarkdownView: View, Equatable {
                 }
                 .padding(.horizontal, 12).padding(.vertical, 9)
             }
+            .modifier(SelectableIf(on: selectable))
             .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(Color.primary.opacity(0.04)))
             .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).strokeBorder(Color.primary.opacity(0.07)))
         case .rule:
             Rectangle().fill(Color.primary.opacity(0.1)).frame(height: 1).padding(.vertical, 2)
         }
+    }
+}
+
+/// Код и таблицы остаются SwiftUI Text — выделяемые, как раньше
+struct SelectableIf: ViewModifier {
+    let on: Bool
+    func body(content: Content) -> some View {
+        if on { content.textSelection(.enabled) } else { content }
     }
 }

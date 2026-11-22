@@ -295,7 +295,6 @@ struct MessageRow: View, Equatable {
         VStack(alignment: .leading, spacing: 8) {
             if !item.images.isEmpty { ImagesStrip(paths: item.images, height: 140, onZoom: onZoom) }
             MarkdownView(text: item.text)
-                .textSelection(.enabled)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.trailing, 40)
@@ -352,9 +351,8 @@ struct ReportBlock: View {
             Group {
                 if expanded {
                     MarkdownView(text: body_, size: 13, secondary: true)
-                        .textSelection(.enabled)
                 } else {
-                    MarkdownView(text: body_, size: 13, secondary: true)
+                    MarkdownView(text: body_, size: 13, secondary: true, selectable: false)
                         .frame(maxHeight: 62, alignment: .top)
                         .clipped()
                         .mask(LinearGradient(stops: [.init(color: .black, location: 0), .init(color: .black, location: 0.55), .init(color: .clear, location: 1)], startPoint: .top, endPoint: .bottom))

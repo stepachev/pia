@@ -34,6 +34,16 @@ enum TestHooks {
         if env["PIA_TEST_CYCLE"] == "1" { cycle(app) }
         if let d = env["PIA_TEST_DRAFT"] { m.draft = d }
         if env["PIA_TEST_HELPERS"] == "1" { m.helpersExpanded = true }
+        // PIA_TEST_SNAPSHOT=путь.png — через 4 с снять содержимое своего окна в PNG (без права «Запись экрана»)
+        if let p = env["PIA_TEST_SNAPSHOT"], !p.isEmpty {
+            app.perms.wizardVisible = false
+            DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
+                guard let v = app.panel.contentView, let rep = v.bitmapImageRepForCachingDisplay(in: v.bounds) else { return }
+                v.cacheDisplay(in: v.bounds, to: rep)
+                try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: p))
+                Log.write("снимок окна: \(p)")
+            }
+        }
         if env["PIA_TEST_SEND"] == "1" {
             guard m.client.configPath != NSHomeDirectory() + "/.pi-agent/server.json" else {
                 Log.write("PIA_TEST_SEND пропущен: это настоящая служба")

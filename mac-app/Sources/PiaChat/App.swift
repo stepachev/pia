@@ -478,8 +478,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
 // Непрозрачный фон карточки: светлая тема — белый, тёмная — тёмно-серый; волосяная рамка, скруглённые углы.
 /// Контейнер окна: наведение на карточку, когда pia не активна (tracking area .activeAlways — события идут и в неактивное окно)
-final class PiaContainerView: LinkTrackingView {
+final class PiaContainerView: NSView {
     var onHover: () -> Void = {}
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        for t in trackingAreas { removeTrackingArea(t) }
+        addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseMoved, .mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+                                       owner: self, userInfo: nil))
+    }
     override func mouseMoved(with e: NSEvent) { check(); super.mouseMoved(with: e) }
     override func mouseEntered(with e: NSEvent) { check() }
     private func check() {
