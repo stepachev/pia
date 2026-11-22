@@ -169,6 +169,8 @@ struct ChatView: View {
                 StatusLine(text: "pia не запущена")
             } else if let e = model.sendError {
                 StatusLine(text: e)
+            } else if let h = model.hint {
+                StatusLine(text: h)
             } else if !model.helpers.isEmpty {
                 HelpersBar(model: model)
             } else if !Permissions.shared.accessibility && !Permissions.shared.wizardVisible {

@@ -12,7 +12,7 @@ enum ContextAX {
         var url: String?
     }
 
-    static func read(pid: pid_t, chromium: Bool, browser: Bool) -> Info {
+    static func read(pid: pid_t, chromium: Bool, browser: Bool, target: WindowTarget? = nil) -> Info {
         var info = Info()
         guard AXIsProcessTrusted() else { return info }
         let app = AXUIElementCreateApplication(pid)
@@ -22,7 +22,7 @@ enum ContextAX {
             AXUIElementSetAttributeValue(app, "AXManualAccessibility" as CFString, kCFBooleanTrue)
         }
 
-        let window = element(app, kAXFocusedWindowAttribute) ?? element(app, kAXMainWindowAttribute)
+        let window = pickWindow(app, target) ?? element(app, kAXFocusedWindowAttribute) ?? element(app, kAXMainWindowAttribute)
         if let window {
             info.windowTitle = string(window, kAXTitleAttribute)
             // AXDocument: у Safari — URL страницы, у документных приложений — путь к файлу.
@@ -51,6 +51,25 @@ enum ContextAX {
     }
 
     /// Поиск AXWebArea с AXURL в окне (ограниченный обход дерева).
+    /// Окно приложения, соответствующее найденному в CGWindowList (по рамке, затем по заголовку); nil — не нашли.
+    static func pickWindow(_ app: AXUIElement, _ target: WindowTarget?) -> AXUIElement? {
+        guard let target, let wins = elements(app, kAXWindowsAttribute) else { return nil }
+        func frame(_ w: AXUIElement) -> CGRect? {
+            var pos = CGPoint.zero, size = CGSize.zero
+            guard let p = value(w, kAXPositionAttribute), CFGetTypeID(p) == AXValueGetTypeID(),
+                  AXValueGetValue(p as! AXValue, .cgPoint, &pos),
+                  let s = value(w, kAXSizeAttribute), CFGetTypeID(s) == AXValueGetTypeID(),
+                  AXValueGetValue(s as! AXValue, .cgSize, &size) else { return nil }
+            return CGRect(origin: pos, size: size)
+        }
+        func close(_ a: CGRect, _ b: CGRect) -> Bool {
+            abs(a.minX - b.minX) < 4 && abs(a.minY - b.minY) < 4 && abs(a.width - b.width) < 4 && abs(a.height - b.height) < 4
+        }
+        if let w = wins.first(where: { frame($0).map { close($0, target.bounds) } ?? false }) { return w }
+        if let t = target.title, !t.isEmpty, let w = wins.first(where: { string($0, kAXTitleAttribute) == t }) { return w }
+        return nil
+    }
+
     static func webAreaURL(in root: AXUIElement, maxNodes: Int = 600, maxDepth: Int = 30) -> String? {
         let deadline = Date().addingTimeInterval(1.0)
         var queue: [(AXUIElement, Int)] = [(root, 0)]

@@ -40,7 +40,7 @@ enum ContextText {
     nonisolated(unsafe) static var lastNote = ""
 
     /// Собрать текст окна приложения (уже очищенный и обрезанный до `limit`).
-    static func collect(pid: pid_t, bundleId: String, selected: String?) async -> Result? {
+    static func collect(pid: pid_t, bundleId: String, selected: String?, target: WindowTarget? = nil) async -> Result? {
         let kind = ContextBrowsers.kind(of: bundleId)
         var note: [String] = []
         if kind == .safari || (kind == .chromium && !noJavaScriptIds.contains(bundleId)) {
@@ -56,7 +56,7 @@ enum ContextText {
         let terminal = terminalIds.contains(bundleId)
         let chromium = ContextBrowsers.isChromium(bundleId)
         let raw = await ctxRunBlocking {
-            axText(pid: pid, web: kind != nil, chromium: chromium, terminal: terminal)
+            axText(pid: pid, web: kind != nil, chromium: chromium, terminal: terminal, target: target)
         } ?? nil
         guard let raw else {
             lastNote = (note + ["AX: текста нет"]).joined(separator: "; ")
@@ -138,7 +138,7 @@ enum ContextText {
     }
 
     /// Текст фокусного окна через AX. web — искать AXWebArea и брать текст из неё.
-    static func axText(pid: pid_t, web: Bool, chromium: Bool, terminal: Bool) -> String? {
+    static func axText(pid: pid_t, web: Bool, chromium: Bool, terminal: Bool, target: WindowTarget? = nil) -> String? {
         guard AXIsProcessTrusted() else { return nil }
         let deadline = Date().addingTimeInterval(axTimeLimit)
         let app = AXUIElementCreateApplication(pid)
@@ -146,7 +146,7 @@ enum ContextText {
         if chromium {
             AXUIElementSetAttributeValue(app, "AXManualAccessibility" as CFString, kCFBooleanTrue)
         }
-        guard let window = ContextAX.element(app, kAXFocusedWindowAttribute) ?? ContextAX.element(app, kAXMainWindowAttribute)
+        guard let window = ContextAX.pickWindow(app, target) ?? ContextAX.element(app, kAXFocusedWindowAttribute) ?? ContextAX.element(app, kAXMainWindowAttribute)
         else { return nil }
         AXUIElementSetMessagingTimeout(window, 0.4)
         var root = window

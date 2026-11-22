@@ -21,6 +21,8 @@ final class ChatModel {
     var attachments: [Attachment] = []
     var draft = ""
     var sendError: String?
+    var hint: String?                    // короткая подсказка в окне (например, нет окон под pia)
+    @ObservationIgnored private var hintTask: Task<Void, Never>?
     var zoomImage: String?
     var helpersExpanded = false
     var loadingOlder = false
@@ -232,6 +234,15 @@ final class ChatModel {
     func removeLastAttachment() {
         guard !attachments.isEmpty else { return }
         _ = withAnimation(.easeOut(duration: 0.15)) { attachments.removeLast() }
+    }
+
+    func showHint(_ text: String) {
+        hint = text
+        hintTask?.cancel()
+        hintTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 4_000_000_000)
+            if !Task.isCancelled { self?.hint = nil }
+        }
     }
 
     func attachContext(_ c: CapturedContext) {

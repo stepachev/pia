@@ -10,18 +10,25 @@ enum ContextScreenshot {
     /// Есть ли право «Запись экрана» (без запроса).
     static var hasScreenRecording: Bool { CGPreflightScreenCaptureAccess() }
 
-    /// Окна приложения на экране, спереди назад (обычный слой 0).
+    /// Окна приложения на экране (обычный слой 0): сначала самое большое по площади (у Yab поверх главного окна лежит
+    /// узкая полоса 1440×68 — она не должна выигрывать только за счёт порядка), при равенстве — то, что выше.
     static func frontWindows(pid: pid_t) -> [(id: CGWindowID, title: String?)] {
         guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
                 as? [[String: Any]] else { return [] }
-        return list.compactMap { w in
+        var out: [(id: CGWindowID, title: String?, area: Double)] = []
+        for w in list {
             guard (w[kCGWindowOwnerPID as String] as? Int).map(pid_t.init) == pid,
                   (w[kCGWindowLayer as String] as? Int) == 0,
-                  let id = w[kCGWindowNumber as String] as? Int else { return nil }
-            if let b = w[kCGWindowBounds as String] as? [String: Any],
-               let wd = b["Width"] as? Double, let ht = b["Height"] as? Double, wd < 40 || ht < 40 { return nil }
-            return (CGWindowID(id), w[kCGWindowName as String] as? String)
+                  (w[kCGWindowAlpha as String] as? Double ?? 1) > 0.05,
+                  let id = w[kCGWindowNumber as String] as? Int,
+                  let b = w[kCGWindowBounds as String] as? [String: Any],
+                  let wd = b["Width"] as? Double, let ht = b["Height"] as? Double, wd >= 40, ht >= 40 else { continue }
+            out.append((CGWindowID(id), w[kCGWindowName as String] as? String, wd * ht))
         }
+        let ordered = out.enumerated().sorted { l, r in
+            l.element.area != r.element.area ? l.element.area > r.element.area : l.offset < r.offset
+        }
+        return ordered.map { ($0.element.id, $0.element.title) }
     }
 
     /// Заголовок переднего окна из CGWindowList (запасной путь; нужен «Запись экрана»).
@@ -29,15 +36,50 @@ enum ContextScreenshot {
         frontWindows(pid: pid).first.flatMap { $0.title }.flatMap { $0.isEmpty ? nil : $0 }
     }
 
+    /// Самое верхнее видимое обычное окно чужого приложения (сверху вниз; слой 0, не своё, не Dock/меню/оверлеи).
+    static func topWindowBelow(excludingPid own: pid_t) -> (app: ContextCapture.AppInfo, target: WindowTarget)? {
+        guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
+                as? [[String: Any]] else { return nil }
+        let skipOwners: Set<String> = ["Dock", "Window Server", "SystemUIServer", "Control Center", "Notification Center",
+                                       "Центр управления", "Центр уведомлений", "Spotlight", "loginwindow"]
+        for w in list {
+            guard let pid = (w[kCGWindowOwnerPID as String] as? Int).map(pid_t.init), pid != own,
+                  (w[kCGWindowLayer as String] as? Int) == 0,
+                  (w[kCGWindowAlpha as String] as? Double ?? 1) > 0.05,
+                  let id = w[kCGWindowNumber as String] as? Int,
+                  let b = w[kCGWindowBounds as String] as? [String: Any],
+                  let x = b["X"] as? Double, let y = b["Y"] as? Double,
+                  let wd = b["Width"] as? Double, let ht = b["Height"] as? Double, wd >= 120, ht >= 120 else { continue }
+            if let o = w[kCGWindowOwnerName as String] as? String, skipOwners.contains(o) { continue }
+            guard let ra = NSRunningApplication(processIdentifier: pid), ra.activationPolicy == .regular else { continue }
+            let info = ContextCapture.AppInfo(pid: pid, name: ra.localizedName ?? ra.bundleIdentifier ?? "?",
+                                              bundleId: ra.bundleIdentifier ?? "")
+            // у приложения может быть несколько окон (панели, полосы): берём самое большое из подходящих
+            var best = (id: id, x: x, y: y, wd: wd, ht: ht, title: w[kCGWindowName as String] as? String)
+            for o in list {
+                guard (o[kCGWindowOwnerPID as String] as? Int).map(pid_t.init) == pid, (o[kCGWindowLayer as String] as? Int) == 0,
+                      (o[kCGWindowAlpha as String] as? Double ?? 1) > 0.05, let oid = o[kCGWindowNumber as String] as? Int,
+                      let ob = o[kCGWindowBounds as String] as? [String: Any],
+                      let ox = ob["X"] as? Double, let oy = ob["Y"] as? Double,
+                      let ow = ob["Width"] as? Double, let oh = ob["Height"] as? Double, ow >= 120, oh >= 120,
+                      ow * oh > best.wd * best.ht else { continue }
+                best = (oid, ox, oy, ow, oh, o[kCGWindowName as String] as? String)
+            }
+            return (info, WindowTarget(windowID: CGWindowID(best.id), bounds: CGRect(x: best.x, y: best.y, width: best.wd, height: best.ht), title: best.title))
+        }
+        return nil
+    }
+
     /// Снять переднее окно приложения и сохранить (поля обрезаны, ≤ 800 px, PNG или JPEG); вернуть путь или nil.
-    static func capture(pid: pid_t) async -> String? {
+    static func capture(pid: pid_t, windowID: CGWindowID? = nil) async -> String? {
         guard hasScreenRecording else { return nil }
         guard #available(macOS 14.0, *) else { return nil }
-        let ids = frontWindows(pid: pid).map(\.id)
+        let ids = windowID.map { [$0] } ?? frontWindows(pid: pid).map(\.id)
         do {
             let content = try await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: true)
             let window = ids.lazy.compactMap { id in content.windows.first { $0.windowID == id } }.first
-                ?? content.windows.first { $0.owningApplication?.processID == pid && $0.windowLayer == 0 && $0.isOnScreen }
+                ?? content.windows.filter { $0.owningApplication?.processID == pid && $0.windowLayer == 0 && $0.isOnScreen && $0.frame.width >= 40 && $0.frame.height >= 40 }
+                    .max { $0.frame.width * $0.frame.height < $1.frame.width * $1.frame.height }
             guard let window else { return nil }
             let filter = SCContentFilter(desktopIndependentWindow: window)
             let config = SCStreamConfiguration()

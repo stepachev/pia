@@ -417,7 +417,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let pia = isFocused
         Task { @MainActor in
             defer { capturing = false }
-            if !pia, let ctx = await ContextCapture.captureFrontmost() {
+            if pia {
+                // pia в фокусе — берём первое окно другого приложения под ней (фокус не переключаем)
+                if let ctx = await ContextCapture.captureBelowSelf() {
+                    model.attachContext(ctx)
+                } else {
+                    model.showHint("Под окном pia нет окон для захвата")
+                }
+            } else if let ctx = await ContextCapture.captureFrontmost() {
                 model.attachContext(ctx)
             }
             show(source: "двойной правый Shift")

@@ -3,6 +3,13 @@ import ApplicationServices
 import CoreGraphics
 import Foundation
 
+/// Конкретное окно (из CGWindowList), с которого снимается контекст, когда активно само pia.
+struct WindowTarget: Sendable, Equatable {
+    var windowID: CGWindowID
+    var bounds: CGRect
+    var title: String?
+}
+
 /// Контекст активного окна на момент жеста.
 struct CapturedContext: Sendable, Codable, Equatable {
     var appName: String
@@ -80,6 +87,13 @@ enum ContextCapture {
         return await capture(app)
     }
 
+    /// Контекст первого окна под окном pia (без смены фокуса). nil — подходящих окон нет.
+    static func captureBelowSelf() async -> CapturedContext? {
+        let own = ProcessInfo.processInfo.processIdentifier
+        guard let found = await ctxRunBlocking({ ContextScreenshot.topWindowBelow(excludingPid: own) }) ?? nil else { return nil }
+        return await capture(found.app, target: found.target)
+    }
+
     /// Контекст конкретного запущенного приложения (по bundle id) — для проверок.
     static func capture(bundleId: String) async -> CapturedContext? {
         let info: AppInfo? = await MainActor.run {
@@ -107,7 +121,7 @@ enum ContextCapture {
         }
     }
 
-    private static func capture(_ app: AppInfo) async -> CapturedContext {
+    private static func capture(_ app: AppInfo, target: WindowTarget? = nil) async -> CapturedContext {
         let base = CapturedContext(appName: app.name, bundleId: app.bundleId)
         let isBrowser = ContextBrowsers.kind(of: app.bundleId) != nil
         let chromium = ContextBrowsers.isChromium(app.bundleId)
@@ -117,16 +131,16 @@ enum ContextCapture {
         let result = await ctxWithDeadline(totalTimeout) { () -> CapturedContext? in
             // Шаги идут параллельно, у каждого свой таймаут.
             async let axInfo: ContextAX.Info? = ctxWithDeadline(step) {
-                await ctxRunBlocking { ContextAX.read(pid: app.pid, chromium: chromium, browser: isBrowser) }
+                await ctxRunBlocking { ContextAX.read(pid: app.pid, chromium: chromium, browser: isBrowser, target: target) }
             }
             async let tab: ContextBrowsers.Tab? = isBrowser
                 ? ctxWithDeadline(step) { await ContextBrowsers.activeTab(bundleId: app.bundleId, timeout: step) }
                 : nil
             async let text: ContextText.Result? = ctxWithDeadline(2.2) {
-                await ContextText.collect(pid: app.pid, bundleId: app.bundleId, selected: nil)
+                await ContextText.collect(pid: app.pid, bundleId: app.bundleId, selected: nil, target: target)
             }
             async let shot: String? = wantShot
-                ? ctxWithDeadline(step) { await ContextScreenshot.capture(pid: app.pid) }
+                ? ctxWithDeadline(step) { await ContextScreenshot.capture(pid: app.pid, windowID: target?.windowID) }
                 : nil
 
             var c = base
@@ -139,6 +153,7 @@ enum ContextCapture {
             }
             if c.url == nil { c.url = ax?.url }
             if isBrowser, c.pageTitle == nil { c.pageTitle = ax?.windowTitle }
+            if c.windowTitle == nil, let t = target?.title, !t.isEmpty { c.windowTitle = t }
             if c.windowTitle == nil {
                 c.windowTitle = await ctxWithDeadline(0.5) {
                     await ctxRunBlocking { ContextScreenshot.frontWindowTitle(pid: app.pid) } ?? nil
