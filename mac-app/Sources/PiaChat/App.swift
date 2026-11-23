@@ -33,7 +33,7 @@ final class PiaPanel: NSPanel {
         hidesOnDeactivate = false
         isReleasedWhenClosed = false
         collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
-        minSize = NSSize(width: 460 + 2 * m, height: 300 + 2 * m)
+        minSize = NSSize(width: 300 + 2 * m, height: 300 + 2 * m)
         animationBehavior = .utilityWindow
     }
 
@@ -57,7 +57,7 @@ final class PiaPanel: NSPanel {
     static func savedSize() -> NSSize {
         let d = UserDefaults.standard
         let w = d.double(forKey: "pia.window.w"), h = d.double(forKey: "pia.window.h")
-        return (w >= 460 && h >= 300) ? NSSize(width: w, height: h) : NSSize(width: 750, height: 500)
+        return (w >= 300 && h >= 300) ? NSSize(width: w, height: h) : NSSize(width: 750, height: 500)
     }
 }
 

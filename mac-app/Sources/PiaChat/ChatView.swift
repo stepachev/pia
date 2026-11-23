@@ -297,7 +297,7 @@ struct MessageRow: View, Equatable {
     private var user: some View {
         let parts = ContextFormat.split(item.text)
         return HStack(alignment: .top, spacing: 0) {
-            Spacer(minLength: 90)
+            Spacer(minLength: 48)
             VStack(alignment: .trailing, spacing: 6) {
                 ForEach(Array(parts.contexts.enumerated()), id: \.offset) { _, l in
                     ContextPill(label: l, bundleId: nil, compact: true)

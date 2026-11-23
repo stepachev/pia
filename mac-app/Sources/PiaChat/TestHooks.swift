@@ -44,6 +44,13 @@ enum TestHooks {
                 Log.write("снимок окна: \(p)")
             }
         }
+        // PIA_TEST_WIDTH=300 — ширина карточки (pt) для проверки сужения
+        if let ws = env["PIA_TEST_WIDTH"], let w = Double(ws) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+                var f = app.panel.frame; f.size.width = CGFloat(w) + 2 * PiaPanel.margin
+                app.panel.setFrame(f, display: true)
+            }
+        }
         if env["PIA_TEST_SEND"] == "1" {
             guard m.client.configPath != NSHomeDirectory() + "/.pi-agent/server.json" else {
                 Log.write("PIA_TEST_SEND пропущен: это настоящая служба")

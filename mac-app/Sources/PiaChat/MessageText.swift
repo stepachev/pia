@@ -208,7 +208,9 @@ struct MessageText: NSViewRepresentable {
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, nsView v: PiaTextView, context: Context) -> CGSize? {
-        if let w = proposal.width, w.isFinite, w > 0 {
+        if let w = proposal.width, w.isFinite {
+            // ширина 0 (запрос минимального размера) — не «одна строка на абзац», иначе лента не сжимается уже текста
+            if w < 1 { return CGSize(width: 0, height: v.measure(width: 24).height) }
             return CGSize(width: w, height: v.measure(width: w).height)
         }
         let s = v.measure(width: 100_000)   // идеальный размер — одна строка на абзац
