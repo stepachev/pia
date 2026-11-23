@@ -28,14 +28,19 @@ const CHARACTER = `Ты — единственный личный помощни
 У пользователя Mac: сочетания клавиш называй маковские — ⌘ Cmd вместо Ctrl (⌘D, ⌘C, ⌘V), ⌥ Option вместо Alt. Ctrl упоминай только там, где на Mac именно Ctrl (например Ctrl+C в терминале).
 Как работаешь: на болтовню и вопросы из головы отвечай сам. Всё остальное — через helper.
 Делай именно то, что просит пользователь. Если он ждёт результат (например, готовый ролик) — цель только этот результат: не подменяй её уборкой, записями, отчётами или вопросами. Не задавай лишних вопросов, если ответ можно найти в его файлах — поручи помощнику найти.
-Задание помощнику пиши полностью, он не видит разговор: цель и что считается готовым результатом, папки и пути, где лежат инструкции (пусть сначала прочитает их и следует им), что нельзя трогать. Большую задачу разбей на части, независимые — одновременно.
-Проверяй отчёты: не говори пользователю, что сделано, если помощник этого не подтвердил; сомнительное — поручи проверить другому помощнику. ОБЯЗАТЕЛЬНО: получив новую задачу, перед запуском помощников — одна короткая фраза, что делаешь (до 10 слов), и в том же ответе сразу запускай помощников, не дожидаясь ответа. У каждого helper заполняй title.
+Задание помощнику пиши полностью, он не видит разговор: слова пользователя ДОСЛОВНО (цитатой) и полные пути ко всем его картинкам, цель и что считается готовым результатом, папки и пути, где лежат инструкции (пусть сначала прочитает их и следует им), что нельзя трогать. Большую задачу разбей на части, независимые — одновременно.
+ОДНА ЗАДАЧА — ОДИН ПОМОЩНИК. Если пользователь продолжает, уточняет или говорит «не работает» по задаче, которую уже делал помощник #N (даже закончивший), — вызывай helper с continue: N: этот помощник помнит, что читал, менял и пробовал. Нового помощника запускай только на новую задачу. Если продолжить нельзя — в задание нового включи отчёт прошлого и что не сработало.
+Работа с кодом (правка, сборка, отладка программ и интерфейсов) — model: opus.
+Снимки экрана помощникам РАЗРЕШЕНЫ для самопроверки (решение пользователя 2026-11-23; старый запрет «не делать скриншоты, проверяет пользователь» отменён). Запрещено по-прежнему только вмешиваться в его экран: мышь, клавиши, набор в его окна, новые окна Терминала, фокус, буфер обмена.
+Проверяй отчёты: не говори пользователю, что сделано, если помощник этого не подтвердил; проверено «на тестовой копии» или не проверено вовсе — так и скажи, это не «готово»; сомнительное — поручи проверить другому помощнику. ОБЯЗАТЕЛЬНО: получив новую задачу, перед запуском помощников — одна короткая фраза, что делаешь (до 10 слов), и в том же ответе сразу запускай помощников, не дожидаясь ответа. У каждого helper заполняй title.
 Помощники работают В ФОНЕ: helper сразу возвращает номер помощника (#N), а его отчёт придёт позже отдельным сообщением «[Отчёт помощника #N …]». После запуска — не больше одной короткой фразы или ничего лишнего, и закончи ход — не жди. Пока они работают, ты свободен: отвечай пользователю на любые вопросы как обычно. Не выдумывай результат до отчёта; «как дела?» — helper_list. Если пользователь уточняет или меняет задачу работающего помощника — передай ему через helper_message; если просит остановиться («стоп», «отмена») — helper_stop. Когда пришёл отчёт — проверь его и сообщи пользователю итог или запусти следующий шаг.
 Перед оплатой, отправкой от имени пользователя, удалением важного — спроси, если он заранее не разрешил (проверь память).`;
 const HELPER = `Ты — исполнитель части задачи для главного помощника. Сделай её сам до конца.
 Если в папке задачи есть инструкции (README, AGENTS.md, файлы с описанием процесса) — сначала прочитай их и следуй им. Подключения (MCP, если они настроены) находи через tool_search, только когда они нужны.
 Если во время работы придёт сообщение пользователя — оно главнее задания: учти его сразу.
-Отчёт — сжато, до 5 строк: только ответ на задачу (факты, цифры), 1–2 источника короткими ссылками, что не вышло. Без вступлений и пересказа процесса.
+Тебе могут прислать продолжение задачи (уточнение, «не работает») — опирайся на всё, что уже сделал и выяснил в этом разговоре, не начинай заново.
+Работа с кодом: сначала прочитай AGENTS.md/README проекта и код вокруг места правки; найди причину, а не симптом. Существующие файлы правь инструментом edit (не write, не sed/python). После правки собери и проверь на настоящем (запуск, лог, снимок экрана), сравни с картинкой пользователя, если она есть. Снимки РАЗРЕШЕНЫ (тихо: screencapture -x, лучше одного окна -l <id>) — старый запрет на скриншоты отменён. По-прежнему нельзя: двигать мышь, нажимать клавиши и набирать в окна пользователя, открывать окна Терминала, забирать фокус, трогать буфер обмена. Не удалось проверить на настоящем — прямо так и напиши. Отчёт по коду — до 10 строк: причина, что изменено (файлы), как проверено.
+Остальные отчёты — сжато, до 5 строк: только ответ на задачу (факты, цифры), 1–2 источника короткими ссылками, что не вышло. Без вступлений и пересказа процесса.
 Сверяй источники, после действий на сайте проверяй результат. Не плати, не отправляй и не удаляй ничего. По-русски.
 Node-скрипты запускай командой \`node\` (она есть в PATH службы) или process.execPath, а не \`pia\`: \`pia\` — это чат.\nЗависания: у каждой команды есть таймаут (bash по умолчанию 120 с, браузер ${LIMITS.browser.def} с). Скрипты Node/Playwright/CDP обязательно завершай (browser.close() или process.exit() и в catch тоже) и запускай с \`timeout N\`. Долгое (ffmpeg, заливка, опрос) — запускай с явным timeout побольше или в фоне (nohup … > лог &) и проверяй короткими командами; опрос — с лимитом времени. Если пришла ошибка про таймаут или сообщение сторожа — не повторяй то же самое, выбери другой путь.`;
 
@@ -48,8 +53,9 @@ const ok = (text) => ({ output: [{ type: "text", text }] });
 const Helpers = defineExtension({ name: "helpers", tools: [
   defineTool({
     name: "helper",
-    description: "Запустить помощника в фоне. Сразу возвращает его номер (#N); отчёт придёт позже отдельным сообщением. Несколько вызовов идут одновременно. Опиши задачу полностью: помощник не видит разговор. model: smart (по умолчанию; всегда для работы в браузере и на сайтах), fast (дёшево, только простое без браузера) или opus (самая мощная и дорогая модель выбранного провайдера — только если пользователь прямо попросил опус или самую мощную модель).",
-    parameters: obj({ title: opt(str({ description: "3–8 слов для пользователя: чем занят помощник (например: «разбираю референс»)" })), task: str(), model: opt(union([lit("fast"), lit("smart"), lit("opus")])) }),
+    description: "Запустить помощника в фоне. Сразу возвращает его номер (#N); отчёт придёт позже отдельным сообщением. Несколько вызовов идут одновременно. Опиши задачу полностью: помощник не видит разговор. continue: N — продолжить ту же задачу тем же помощником #N (он помнит всю свою прошлую работу); тогда в task — только новое: слова пользователя дословно, пути к картинкам. model: opus — любая работа с кодом (правка, сборка, отладка) и если пользователь просит опус; smart (по умолчанию) — всё остальное: браузер, сайты, поиск, файлы, дела.",
+    parameters: obj({ title: opt(str({ description: "3–8 слов для пользователя: чем занят помощник (например: «разбираю референс»)" })), task: str(), model: opt(union([lit("smart"), lit("opus")])),
+      continue: opt(num({ description: "номер прошлого помощника, если это продолжение его задачи" })) }),
     replay: "safe",
     execute: async (args, api, ctx) => {
       try {
@@ -57,6 +63,11 @@ const Helpers = defineExtension({ name: "helpers", tools: [
         const legacy = await api.commit(async (tx) => (await tx.scanConversations({ ownerTaskId: api.taskId }, 1)).items[0], ctx);
         if (legacy !== undefined) return await runHelper(args, api, ctx);
         if (Date.now() < mainLimitUntil) return ok(`Лимит модели сейчас исчерпан — помощника не запускаю. ${mainLimitLine(mainLimitUntil)}`);
+        if (args.continue != null) {
+          const said = await continueHelper(String(api.taskId), args, ctx);
+          if (said) return ok(said);
+          args = { ...args, task: `${args.task}\n\n(Это продолжение задачи прошлого помощника #${args.continue}, но его разговор недоступен — начни с чтения нужных файлов.)` };
+        }
         const rec = await startHelper(String(api.taskId), args, ctx);
         return ok(`Помощник #${rec.n} «${rec.title}» запущен в фоне. Отчёт придёт отдельным сообщением.`);
       } catch (e) { logErr("helper", e); throw e; }
@@ -147,20 +158,58 @@ let pendingReports = [];            // отчёты, которые ещё не 
 let onReport = () => {};
 let closing = false;
 // Модель помощника по роли (smart по умолчанию; opus — самая мощная модель выбранного провайдера)
-const helperRole = (m) => (m === "opus" ? ROLES.opus : m === "fast" ? ROLES.fast : ROLES.smart);
+// fast (Haiku) помощникам больше не даём (решение пользователя): код — opus, остальное — smart
+const helperRole = (m) => (m === "opus" ? ROLES.opus : ROLES.smart);
+const helperExtensions = () => [Files, Web, Browser, Memory, Mcp, ToolSearch, CheapCompaction, CacheFix, ImageTrim];
 async function startHelper(key, args, ctx) {
   let rec = store.items[key];
   if (!rec) {
     const conv = await harness.createConversation({ ownership: { kind: "ownerless" }, agent: {
       model: ref(helperRole(args.model)), thinkingLevel: helperRole(args.model).thinking, cwd: WORKDIR,
       instructions: HELPER, maxTurns: 80, compaction: COMPACTION,
-      extensions: [Files, Web, Browser, Memory, Mcp, ToolSearch, CheapCompaction, CacheFix, ImageTrim],
+      extensions: helperExtensions(),
     } }, ctx);
-    rec = { n: store.next++, conv: conv.id, title: String(args.title ?? "").trim() || "работает", task: args.task, started: Date.now() };
+    rec = { n: store.next++, conv: conv.id, model: args.model === "opus" ? "opus" : "smart", title: String(args.title ?? "").trim() || "работает", task: args.task, started: Date.now() };
     store.items[key] = rec; saveStore();
   }
   watchHelper(key, rec);
   return rec;
+}
+// Продолжение задачи тем же помощником: его разговор (всё, что он читал, менял и пробовал) остаётся,
+// новое сообщение уходит туда же. Работает — передаём на ходу; закончил — запускаем его разговор снова.
+// Возвращает текст для главного или null, если продолжить нельзя (тогда запустится новый помощник).
+const DONE_KEEP = 60;
+async function continueHelper(key, args, ctx) {
+  const n = Number(args.continue);
+  const running = [...runningHelpers.values()].find((x) => x.n === n);
+  if (running && !store.items[key]) {
+    try {
+      const conv = await harness.conversation(running.conv, context);
+      await conv.submit({ type: "input", whenBusy: "steer", whenIdle: "reject", content: `Продолжение задачи от пользователя (важнее задания): ${args.task}` }, context);
+      return `Помощник #${n} ещё работает — передал ему это на ходу.`;
+    } catch (e) { logErr("helper-continue", e); return `Помощник #${n} как раз заканчивает — дождись его отчёта и повтори continue: ${n}.`; }
+  }
+  let rec = store.items[key];
+  if (!rec) {
+    const past = store.done?.[n];
+    const conv = past && await harness.conversation(past.conv, ctx);
+    if (!conv) return null;
+    // Модель и уровень размышлений — всегда из текущих настроек (а не те, с которыми помощника когда-то запустили)
+    const model = args.model ?? past.model ?? "smart", role = helperRole(model);
+    await conv.configure({ instructions: HELPER, extensions: helperExtensions(), model: ref(role), thinkingLevel: role.thinking }, ctx);
+    rec = { n, conv: past.conv, model, title: String(args.title ?? "").trim() || past.title, started: Date.now(),
+      task: `Продолжение той же задачи. Всё, что ты уже прочитал, изменил и выяснил, — выше в этом разговоре; опирайся на это, не начинай заново.\n\n${args.task}` };
+    store.items[key] = rec; saveStore();
+  }
+  watchHelper(key, rec);
+  return `Помощник #${n} «${rec.title}» продолжает в фоне и помнит свою прошлую работу. Отчёт придёт отдельным сообщением.`;
+}
+function rememberDone(rec) {
+  store.done ??= {};
+  store.done[rec.n] = { conv: rec.conv, title: rec.title, model: rec.model, at: Date.now() };
+  const ns = Object.keys(store.done).map(Number).sort((a, b) => a - b);
+  for (const x of ns.slice(0, Math.max(0, ns.length - DONE_KEEP))) delete store.done[x];
+  saveStore();
 }
 function watchHelper(key, rec) {
   if (runningHelpers.has(key)) return;
@@ -209,6 +258,7 @@ function watchHelper(key, rec) {
       logErr("helper-bg", e); text = `Ошибка: ${e?.message ?? e}`;
     }
     runningHelpers.delete(key);
+    rememberDone(rec);
     await killHelperTree(rec);   // завершился, ошибка или остановка: осиротевших процессов не оставляем
     pendingReports.push({ key, n: rec.n, title: rec.title, text: `[Отчёт помощника #${rec.n} «${rec.title}»]\n${text.slice(0, 4000)}` });
     onReport();
@@ -243,7 +293,7 @@ async function runHelper(args, api, ctx) {
 const activeHelpers = new Set();
 const helperTitles = new Map();   // чем занят каждый помощник — для строки статуса
 // Чем занят помощник сейчас: текущий инструмент и сколько секунд (или «думает» — запрос к модели)
-const DOING = { bash: "команда", browser: "браузер", web_search: "поиск", fetch_page: "страница", read: "чтение", write: "запись", tool_search: "умение" };
+const DOING = { bash: "команда", browser: "браузер", web_search: "поиск", fetch_page: "страница", read: "чтение", write: "запись", edit: "правка", tool_search: "умение" };
 function doingOf(rec) {
   const now = Date.now(), t = currentTool(rec.conv, now);
   if (t) return { label: DOING[t.name] ?? (t.name.startsWith("mcp__") ? "MCP" : t.name), since: t.since, stuck: t.over || t.ms > 150_000 };
@@ -405,7 +455,7 @@ const DebugPayload = defineExtension({ name: "debug-payload", hooks: [hook(Gener
 // Окно 1 млн: ждать сжатия на 200 тыс., фоновое сжатие с 150 тыс., последние 60 тыс. — дословно
 const COMPACTION = { enabled: true, reserveTokens: 800_000, backgroundTokens: 50_000, keepRecentTokens: 60_000 };
 const LABELS = { web_search: "ищу в интернете", fetch_page: "читаю страницу", browser: "работаю в браузере", helper: "запускаю помощника", helper_list: "смотрю, кто работает", helper_message: "передаю помощнику", helper_stop: "останавливаю помощника",
-  memory_search: "вспоминаю", tool_search: "ищу нужное умение", memory_read: "вспоминаю", remember: "запоминаю", bash: "работаю на компьютере", read: "читаю файл", write: "пишу файл" };
+  memory_search: "вспоминаю", tool_search: "ищу нужное умение", memory_read: "вспоминаю", remember: "запоминаю", bash: "работаю на компьютере", read: "читаю файл", write: "пишу файл", edit: "правлю файл" };
 const txt = (m) => (m?.content ?? []).filter((c) => c.type === "text").map((c) => c.text).join("");
 export const STOP_WORDS = ["стоп", "stop", "хватит", "остановись", "отмена"];
 
@@ -457,9 +507,9 @@ export async function openCore() {
   else { feed.load(); await catchUp(); }
 
   // ── Состояние главного: отвечает ли сейчас, чем занят ──
-  let busy = false, stopping = false, label = "думаю", startedAt = 0, toolRunning = false;
+  let busy = false, stopping = false, label = "думаю", startedAt = 0, toolRunning = false, tool = null;
   let queue = [], extra = [];
-  const liveState = () => ({ busy, stopping, label, startedAt, toolRunning,
+  const liveState = () => ({ busy, stopping, label, startedAt, toolRunning, tool: toolRunning ? tool : null,
     key: busy && !toolRunning ? feed.live?.key ?? null : null, text: busy && !toolRunning ? feed.live?.text ?? "" : "" });
   let liveTimer = null, liveSent = "";
   const emitLive = (now = false) => {
@@ -478,7 +528,8 @@ export async function openCore() {
       const live = v.docs?.["pi.live"] ?? {};
       const running = (live.tools ?? []).filter((t) => t.status !== "done");
       toolRunning = running.length > 0;
-      if (toolRunning) label = LABELS[running[running.length - 1].name] ?? "работаю";
+      tool = toolRunning ? running[running.length - 1].name ?? null : null;
+      if (toolRunning) label = LABELS[tool] ?? "работаю";
       else {
         label = "думаю";
         const partial = txt(live.generation?.message).replace(/^\s+/, "");

@@ -7,7 +7,7 @@ import { promisify } from "node:util";
 import { loadRoles, buildModels, ref } from "./providers.mjs";
 import { obj, str, num, opt } from "@earendil-works/pi-schema";
 import { defineTool, defineExtension, section } from "@earendil-works/pi-durable";
-import { createReadTool, createWriteTool, createBashTool } from "@earendil-works/pi-durable/tools";
+import { createReadTool, createWriteTool, createEditTool, createBashTool } from "@earendil-works/pi-durable/tools";
 import { LIMITS, clampSec, guardTool } from "./guard.mjs";
 
 const run = promisify(execFile);
@@ -76,7 +76,8 @@ function bashTool() {
 }
 export const Files = defineExtension({ name: "files", tools: [
   short(createReadTool({ images: smallImages }), "Прочитать файл.", obj({ path: str(), offset: opt(num()), limit: opt(num()) })),
-  short(createWriteTool(), "Записать файл целиком.", obj({ path: str(), content: str() })),
+  short(createWriteTool(), "Записать файл целиком (новый файл или полная перезапись).", obj({ path: str(), content: str() })),
+  { ...createEditTool(), description: "Точечная правка файла: каждый edits[].oldText — точный уникальный фрагмент файла, заменяется на newText. Для правок существующего кода — всегда edit, а не write или sed/python в bash." },
   bashTool(),
 ] });
 
