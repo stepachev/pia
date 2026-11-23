@@ -337,6 +337,13 @@ struct ImagesStrip: View {
     var height: CGFloat
     var onZoom: (String) -> Void
     var body: some View {
+        // превью фиксированной ширины: не влезают в узкое окно — листаются вбок, а не раздвигают ленту шире окна
+        ViewThatFits(in: .horizontal) {
+            row
+            ScrollView(.horizontal, showsIndicators: false) { row }
+        }
+    }
+    private var row: some View {
         HStack(spacing: 6) {
             ForEach(paths, id: \.self) { p in
                 Thumb(path: p, height: height, maxWidth: height * 2)
@@ -534,8 +541,8 @@ struct ContextPill: View {
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .truncationMode(.middle)
-                .frame(maxWidth: 360, alignment: .leading)
-                .fixedSize(horizontal: true, vertical: false)
+                // не fixedSize: пилюля с длинным заголовком (до 360) не держит ширину ленты — в узком окне сокращается «…»
+                .modifier(CappedWidth(max: 360))
         }
         .padding(.horizontal, 9)
         .padding(.vertical, compact ? 4 : 6)
@@ -546,6 +553,26 @@ struct ContextPill: View {
 }
 
 // MARK: - вспомогательное
+
+/// Ширина не больше max и не больше предложенной; сам вид — по своему размеру (короткий текст не растягивается до max).
+/// Замена `.frame(maxWidth:).fixedSize(horizontal: true)`: тот держал ширину max даже в узком окне.
+struct CappedWidth: ViewModifier {
+    let max: CGFloat
+    func body(content: Content) -> some View { CappedWidthLayout(max: max) { content } }
+}
+
+struct CappedWidthLayout: Layout {
+    let max: CGFloat
+    private func cap(_ p: ProposedViewSize) -> ProposedViewSize {
+        ProposedViewSize(width: Swift.min(p.width ?? max, max), height: p.height)
+    }
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        subviews.first?.sizeThatFits(cap(proposal)) ?? .zero
+    }
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        subviews.first?.place(at: bounds.origin, anchor: .topLeading, proposal: ProposedViewSize(width: bounds.width, height: bounds.height))
+    }
+}
 
 func plural(_ n: Int, _ one: String, _ few: String, _ many: String) -> String {
     let m10 = n % 10, m100 = n % 100

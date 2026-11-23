@@ -7,6 +7,7 @@ import AppKit
 //   PIA_TEST_DRAFT=текст          — набрать текст в поле ввода
 //   PIA_TEST_SEND=1               — через 2 с отправить (только если сервер не ~/.pi-agent/server.json)
 //   PIA_TEST_CYCLE=1              — скрыть/показать, сменить размер, key туда-обратно; в лог — есть ли кнопки-«светофор»
+//   pia://test-width?w=300        — ширина карточки настоящего окна без мыши (см. setCardWidth)
 //   PIA_TEST_EXPAND_REPORTS / PIA_TEST_HELPERS=1 — показать список помощников раскрытым
 @MainActor
 enum TestHooks {
@@ -58,6 +59,24 @@ enum TestHooks {
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 2) { m.send() }
         }
+    }
+
+    /// pia://test-width?w=300 — ширина карточки (pt) настоящего окна без мыши (левый верхний угол на месте); &h= — высота карточки,
+    /// &x=&y= — левый верхний угол окна (как в AX: от верха главного экрана). Положение и размер не сохраняются.
+    static func setCardWidth(_ app: AppDelegate, _ u: URL?) {
+        guard let p = app.panel, let u, let q = URLComponents(url: u, resolvingAgainstBaseURL: false)?.queryItems else { return }
+        func num(_ n: String) -> CGFloat? { q.first(where: { $0.name == n })?.value.flatMap(Double.init).map { CGFloat($0) } }
+        let m = PiaPanel.margin
+        var f = p.frame
+        let top = f.maxY
+        if let w = num("w") { f.size.width = max(p.minSize.width, w + 2 * m) }
+        if let h = num("h") { f.size.height = max(p.minSize.height, h + 2 * m) }
+        f.origin.y = top - f.height
+        if let x = num("x"), let y = num("y"), let main = NSScreen.screens.first {
+            f.origin = NSPoint(x: x, y: main.frame.maxY - y - f.height)
+        }
+        p.setFrame(f, display: true)
+        Log.write("тест: карточка \(Int(p.cardFrame.width))×\(Int(p.cardFrame.height))")
     }
 
     /// Проверка обработчика drop на частных NSPasteboard (без мыши): file-url, tiff-данные, file promise.

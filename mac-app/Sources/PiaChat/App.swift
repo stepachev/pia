@@ -234,6 +234,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         case "option-off": setOptionHotkey(false)
         case "permissions", "permission", "access": openPermissions(source: "pia://\(cmd)")
         case "toggle": isFocused ? hide(reason: "pia://toggle") : show(source: "pia://toggle")
+        case "test-width": TestHooks.setCardWidth(self, u)
         default: show(source: "pia://\(cmd)")
         }
     }
