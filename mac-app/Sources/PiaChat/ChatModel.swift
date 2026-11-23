@@ -16,6 +16,10 @@ enum Attachment: Identifiable {
 final class ChatModel {
     var items: [FeedItem] = []
     var busy = false
+    var activity: Activity = .thinking  // чем занята — какой спиннер показывать
+    var stopping = false
+    @ObservationIgnored private var activityAt = Date.distantPast
+    @ObservationIgnored private var activityTask: Task<Void, Never>?
     var connected: Bool? = nil          // nil — ещё не знаем (первая секунда)
     var helpers: [HelperInfo] = []
     var attachments: [Attachment] = []
@@ -93,13 +97,21 @@ final class ChatModel {
                     // «занят» — только сам главный разговор (helpers в busy не входят)
                     if let sb = s.busy { busyNow = sb }
                     let hs = (s.helpers ?? []).filter(\.isWorking).sorted { ($0.n ?? .max) < ($1.n ?? .max) }
+                    // спиннер — только про главного; помощников показывает строка «N работяг»
+                    let l = s.live
+                    setActivity(Activity.from(tool: l?.tool, label: l?.label, toolRunning: l?.toolRunning ?? false, text: l?.text), busyNow: busyNow)
+                    if (l?.stopping ?? false) != stopping { stopping = l?.stopping ?? false }
                     if hs != helpers { withAnimation(.easeOut(duration: 0.2)) { helpers = hs } }
                     if hs.isEmpty && helpersExpanded { helpersExpanded = false }
                 }
             }
             if gen > appliedGen {
                 appliedGen = gen
-                if busyNow != busy { Log.write("точки: \(busyNow ? "вкл" : "выкл")"); withAnimation(.easeOut(duration: 0.2)) { busy = busyNow } }
+                if busyNow != busy {
+                    Log.write("точки: \(busyNow ? "вкл" : "выкл")")
+                    if busyNow { activityTask?.cancel(); activityAt = Date() } else { stopping = false }
+                    withAnimation(.easeOut(duration: 0.2)) { busy = busyNow }
+                }
             }
             return true
         } catch {
@@ -110,6 +122,25 @@ final class ChatModel {
             }
             client.reloadConfig()
             return false
+        }
+    }
+
+    /// Сменить спиннер не чаще раза в 0.7 с: короткие инструменты не дёргают картинку (последнее состояние применится позже)
+    private func setActivity(_ a: Activity, busyNow: Bool) {
+        activityTask?.cancel()
+        guard a != activity else { return }
+        let wait = 0.7 - Date().timeIntervalSince(activityAt)
+        let apply = { [weak self] in
+            guard let self else { return }
+            Log.write("спиннер: \(a.rawValue)")
+            withAnimation(.easeInOut(duration: 0.25)) { self.activity = a }
+            self.activityAt = Date()
+        }
+        if wait <= 0 || !busyNow || !busy { apply(); return }
+        activityTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(wait))
+            guard !Task.isCancelled, self?.busy == true else { return }
+            apply()
         }
     }
 

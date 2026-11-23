@@ -77,7 +77,7 @@ struct ChatView: View {
                             .transition(.asymmetric(insertion: .opacity.combined(with: .offset(y: 10)), removal: .opacity))
                     }
                     if model.busy {
-                        TypingDots().id("typing").transition(.opacity)
+                        TypingDots(activity: model.activity, stopping: model.stopping).id("typing").transition(.opacity)
                     }
                     if model.items.isEmpty && model.connected == false {
                         Text("pia не запущена").font(.system(size: 13)).foregroundStyle(.secondary)
@@ -410,8 +410,10 @@ struct ReportBlock: View {
 }
 
 struct TypingDots: View {
+    var activity: Activity
+    var stopping = false
     var body: some View {
-        Dots3x3Loader()
+        ActivityLoader(activity: activity, dimmed: stopping)
             .padding(.vertical, 6)
             .frame(maxWidth: .infinity, alignment: .leading)
     }

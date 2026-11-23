@@ -9,6 +9,11 @@ func onlyService(_ flag: String) -> String? {
 }
 if args.contains("--register-only") { Autostart.ensureRegistered(only: onlyService("--register-only")).forEach { print($0) }; exit(0) }
 if args.contains("--unregister") { Autostart.unregisterAll(only: onlyService("--unregister")).forEach { print($0) }; exit(0) }
+// --loaders-sheet путь.png — кадры всех спиннеров в PNG (проверка вида без окна)
+if let i = args.firstIndex(of: "--loaders-sheet"), i + 1 < args.count {
+    MainActor.assumeIsolated { LoaderSheet.write(to: args[i + 1]) }
+    exit(0)
+}
 if args.contains("--autostart-status") { Autostart.status().forEach { print($0) }; exit(0) }
 
 // Одно окно: если pia уже запущена (вручную или службой), второй экземпляр тихо выходит (код 0 — служба его не перезапускает).

@@ -59,8 +59,18 @@ struct HelperInfo: Decodable, Equatable, Identifiable {
     var startMs: Double? { startedAt ?? since }
 }
 
+struct LiveState: Decodable, Equatable {
+    var busy: Bool?
+    var stopping: Bool?
+    var label: String?
+    var tool: String?        // имя инструмента (новые версии службы), иначе — по label
+    var toolRunning: Bool?
+    var text: String?
+}
+
 struct StateResponse: Decodable {
     var busy: Bool?
+    var live: LiveState?
     var helpers: [HelperInfo]?
 }
 

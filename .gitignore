@@ -42,3 +42,4 @@ feed.jsonl
 *.backup.*
 !/runtime-bin/node
 /mcp.json
+/models.json
