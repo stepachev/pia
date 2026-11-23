@@ -40,7 +40,10 @@ final class PiaPanel: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
 
+    var mouseGuard: StuckMouseGuard?
+
     override func sendEvent(_ e: NSEvent) {
+        if e.type == .leftMouseDown { mouseGuard?.downInPanel = true }
         if NSWorkspace.shared.frontmostApplication?.processIdentifier != ProcessInfo.processInfo.processIdentifier, [.leftMouseDown, .rightMouseDown, .otherMouseDown].contains(e.type) { onMouseWhileInactive("щелчок") }
         super.sendEvent(e)
     }
@@ -235,6 +238,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         case "permissions", "permission", "access": openPermissions(source: "pia://\(cmd)")
         case "toggle": isFocused ? hide(reason: "pia://toggle") : show(source: "pia://toggle")
         case "test-width": TestHooks.setCardWidth(self, u)
+        case "test-stuck-selection": TestHooks.stuckSelection(self)
         default: show(source: "pia://\(cmd)")
         }
     }
@@ -289,6 +293,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private func buildPanel() {
         panel = PiaPanel()
         panel.delegate = self
+        panel.mouseGuard = StuckMouseGuard(panel: panel)
+        panel.mouseGuard?.start()
         panel.onMouseWhileInactive = { [weak self] how in self?.activateFromMouse(how) }
         panel.onCancel = { [weak self] in
             guard let self else { return }

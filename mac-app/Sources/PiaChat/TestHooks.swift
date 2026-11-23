@@ -8,6 +8,7 @@ import AppKit
 //   PIA_TEST_SEND=1               — через 2 с отправить (только если сервер не ~/.pi-agent/server.json)
 //   PIA_TEST_CYCLE=1              — скрыть/показать, сменить размер, key туда-обратно; в лог — есть ли кнопки-«светофор»
 //   pia://test-width?w=300        — ширина карточки настоящего окна без мыши (см. setCardWidth)
+//   pia://test-stuck-selection    — зависшее выделение без мыши: «нажатие в окне» + скрытие + цикл ждёт отпускания (см. stuckSelection)
 //   PIA_TEST_EXPAND_REPORTS / PIA_TEST_HELPERS=1 — показать список помощников раскрытым
 @MainActor
 enum TestHooks {
@@ -77,6 +78,19 @@ enum TestHooks {
         }
         p.setFrame(f, display: true)
         Log.write("тест: карточка \(Int(p.cardFrame.width))×\(Int(p.cardFrame.height))")
+    }
+
+    /// pia://test-stuck-selection — сценарий зависания 2026-11-23 без мыши: нажатие в окне отмечено, окно прячется,
+    /// главный поток входит в такой же цикл, как NSTextView.mouseDown (nextEvent только leftMouseUp, режим .eventTracking).
+    /// Без StuckMouseGuard цикл ждёт вечно (pia://show не доходит); с ним — выход через ~1 с, в лог «тест: цикл … завершён».
+    static func stuckSelection(_ app: AppDelegate) {
+        guard let p = app.panel else { return }
+        p.mouseGuard?.downInPanel = true
+        app.hide(reason: "тест: зависшее выделение")
+        Log.write("тест: вход в цикл отслеживания мыши")
+        let t0 = Date()
+        let e = NSApp.nextEvent(matching: [.leftMouseUp], until: .distantFuture, inMode: .eventTracking, dequeue: true)
+        Log.write("тест: цикл отслеживания завершён через \(String(format: "%.1f", Date().timeIntervalSince(t0))) с, событие: \(e.map { "\($0.type.rawValue)" } ?? "нет")")
     }
 
     /// Проверка обработчика drop на частных NSPasteboard (без мыши): file-url, tiff-данные, file promise.
