@@ -107,14 +107,24 @@ const Helpers = defineExtension({ name: "helpers", tools: [
 // Остановить помощника n (или всех) — и инструмент helper_stop, и команда «стоп» без модели
 // Убить все процессы помощника (SIGTERM, через 3 с SIGKILL); не ждём — «стоп» отвечает сразу
 const killHelperTree = (r) => killConvTree(r.conv).catch((e) => logErr("kill-tree", e));
-async function stopHelpers(n) {
+async function stopHelpers(n, why = "user") {
   const list = [...runningHelpers.values()].filter((x) => n == null || x.n === n);
-  for (const r of list) { r.stopped = true; r.wake?.(); (await harness.conversation(r.conv, context))?.abort(context).catch(() => {}); killHelperTree(r); }
+  for (const r of list) { r.stopped = true; r.stopWhy ??= why; r.wake?.(); (await harness.conversation(r.conv, context))?.abort(context).catch(() => {}); killHelperTree(r); }
   return list;
 }
 const RESUME_GAP_MS = 90_000, RETRY_MS = 15 * 60_000;   // после сброса лимита ждём ещё 1,5 мин; без времени — повтор раз в 15 мин
 let mainLimitUntil = 0;             // главная модель на лимите до этого времени — новых помощников не запускаем
 let helperNote = () => {};          // служебная строка в ленту (задаётся в openCore)
+let stopMain = () => {};            // прервать ход главного (задаётся в openCore)
+// Лимит кончился (у главного или любого помощника) — останавливаем ВСЁ: всех помощников с их процессами и ход главного.
+// Ничего не продолжается само после сброса — только когда напишет пользователь.
+async function haltOnLimit(at) {
+  const fresh = Date.now() >= mainLimitUntil;
+  mainLimitUntil = Math.max(mainLimitUntil, at ?? Date.now() + RETRY_MS);
+  const list = await stopHelpers(null, "limit");
+  stopMain();
+  if (fresh || list.length) helperNote(`${mainLimitLine(at)} Всё остановил${list.length ? ` (${list.map((r) => "#" + r.n).join(", ")})` : ""}. Сам ничего не продолжу — напишите, когда нужно.`);
+}
 // Текст ошибки модели для распознавания лимита: итог записи и ошибка из истории разговора (errorMessage провайдера)
 async function errorText(conv, settled) {
   let extra = "";
@@ -221,26 +231,14 @@ function watchHelper(key, rec) {
     try {
       const conv = await harness.conversation(rec.conv, context);
       if (!conv) throw new Error("разговор помощника не найден");
-      // Пауза после лимита переживает перезапуск (wakeAt в helpers.json): задание уже идёт в разговоре, не ставим заново
-      if (!rec.wakeAt) settled = await (await conv.submit({ type: "input", content: rec.task, requestId: `helper:${key}` }, context)).wait(context);
+      settled = await (await conv.submit({ type: "input", content: rec.task, requestId: `helper:${key}` }, context)).wait(context);
       while (!closing && !rec.stopped) {
-        if (rec.wakeAt) {   // пауза: ждём сброс лимита и продолжаем с того же места
-          await sleepUntil(rec, rec.wakeAt);
-          if (closing || rec.stopped) break;
-          rec.wakeAt = null; rec.pauseUntil = null; saveStore();
-          rec.progress = { id: lastEntryId(rec.conv), at: Date.now() };
-          helperNote(`#${rec.n} продолжает`);
-          settled = await resumeRun(conv, rec, key);
-          continue;
-        }
         if (!settled || settled.status === "done") break;
         const detail = await errorText(conv, settled);
-        if (isLimitError(detail)) {   // лимит: не отчитываемся, а ставим на паузу
-          const at = limitResetAt(detail);
-          pauseAt(rec, at);
-          killHelperTree(rec);
-          helperNote(helperLimitLine(rec.n, at));
-          continue;
+        if (isLimitError(detail)) {   // лимит: останавливаем всё, без пауз и автопродолжения
+          rec.stopped = true; rec.stopWhy = "limit";
+          await haltOnLimit(limitResetAt(detail));
+          break;
         }
         if (rec.wakeNote) {   // сторож прервал зависший шаг — сообщаем помощнику и даём продолжить (не больше MAX_RESTARTS раз)
           const note = rec.wakeNote; rec.wakeNote = null; rec.restarts = (rec.restarts ?? 0) + 1;
@@ -254,7 +252,7 @@ function watchHelper(key, rec) {
         const e = await conv.commit((tx) => tx.entry(AssistantEntry, settled.answer), context);
         text = (e?.model?.[0]?.content ?? []).filter((c) => c.type === "text").map((c) => c.text).join("").trim() || "(пустой отчёт)";
       }
-      else text = rec.stopped ? "Остановлен по просьбе." : rec.giveUp ? `Остановлен сторожем: ${rec.giveUp}.` : `Не справился (${settled?.reason ?? settled?.status ?? "?"}).`;
+      else text = rec.stopped ? (rec.stopWhy === "limit" ? "Остановлен: кончился лимит модели. Задача не доделана — продолжить можно через continue." : "Остановлен по просьбе.") : rec.giveUp ? `Остановлен сторожем: ${rec.giveUp}.` : `Не справился (${settled?.reason ?? settled?.status ?? "?"}).`;
     } catch (e) {
       if (closing) return;            // pia закрывается — продолжит после перезапуска
       logErr("helper-bg", e); text = `Ошибка: ${e?.message ?? e}`;
@@ -576,10 +574,11 @@ export async function openCore() {
           if (isStop) saidStop = true;
           if (isStop) { feed.addService("Остановил."); continue; }
           const detail = await errorText(chat, res);
-          if (isLimitError(detail)) { const at = limitResetAt(detail); mainLimitUntil = at ?? Date.now() + RETRY_MS; feed.addService(mainLimitLine(at)); }
+          if (isLimitError(detail)) await haltOnLimit(limitResetAt(detail));
           else feed.addService(`Не получилось ответить (${res.reason ?? res.status}).`);
           continue;
         }
+        mainLimitUntil = 0;   // главный ответил — лимит точно не исчерпан
         if (answered.has(res.answer)) continue;
         answered.add(res.answer);
         // Сам ответ попадает в ленту через watch
@@ -587,7 +586,7 @@ export async function openCore() {
     } catch (err) {
       logErr("turn", err);
       const msg = String(err?.message ?? err);
-      if (isLimitError(msg)) { const at = limitResetAt(msg); mainLimitUntil = at ?? Date.now() + RETRY_MS; feed.addService(mainLimitLine(at)); }
+      if (isLimitError(msg)) await haltOnLimit(limitResetAt(msg));
       else feed.addService("Ошибка: " + msg);
     }
     finally {
@@ -598,6 +597,15 @@ export async function openCore() {
   }
   // Отчёты фоновых помощников отдаём главному, когда он свободен; из helpers.json убираем только после этого
   let flushing = false;
+  // Отчёты — в ленту и заметкой к следующему сообщению пользователя, без хода модели
+  function parkReports() {
+    if (!pendingReports.length) return;
+    const items = pendingReports; pendingReports = [];
+    feed.addReports(items);
+    pendingNotes.push(items.map((r) => r.text).join("\n\n"));
+    for (const r of items) delete store.items[r.key];
+    saveStore();
+  }
   async function flushReports() {
     if (busy || flushing || !pendingReports.length) return;
     // Отчёты «остановлен по просьбе» — без хода модели: в ленту и заметкой главному к следующему сообщению пользователя
@@ -610,12 +618,8 @@ export async function openCore() {
       saveStore();
       if (!pendingReports.length) return;
     }
-    // Лимит главного исчерпан — отчёты ждут сброса, модель зря не дёргаем
-    if (Date.now() < mainLimitUntil) {
-      clearTimeout(flushReports.timer);
-      flushReports.timer = setTimeout(() => flushReports(), mainLimitUntil - Date.now() + 5_000);
-      return;
-    }
+    // Лимит исчерпан — отчёты в ленту и заметкой к следующему сообщению пользователя; сами модель не запускают
+    if (Date.now() < mainLimitUntil) { parkReports(); return; }
     flushing = true;
     try {
       const items = pendingReports; pendingReports = [];
@@ -641,6 +645,7 @@ export async function openCore() {
       const list = await stopHelpers(stopCmd.all ? null : stopCmd.n);
       const wasBusy = busy;
       if (wasBusy) stop();
+      if (stopCmd.all) parkReports();   // «стоп» — и уже пришедшие отчёты не запускают главного
       const msg = list.length ? `Остановил: ${list.map((r) => "#" + r.n).join(", ")}.`
         : stopCmd.n != null ? `Помощник #${stopCmd.n} сейчас не работает.` : wasBusy ? "Остановил." : "Сейчас никто не работает.";
       feed.addService(msg);
@@ -706,8 +711,23 @@ export async function openCore() {
   const watchdogTimer = setInterval(() => { watchdogTick(); }, 15_000);
 
   helperNote = (t) => feed.addService(t);
-  // Помощники, не доработавшие в прошлый раз, продолжают (повторная отправка с тем же requestId не дублирует задачу)
-  for (const [key, rec] of Object.entries(store.items)) watchHelper(key, rec);
+  stopMain = () => { stop(); };
+  // Помощники, не доработавшие в прошлый раз (перезапуск, сон, пауза на лимите), сами НЕ продолжают (решение пользователя):
+  // их разговоры обрываем, процессы убиваем, запоминаем для continue и сообщаем главному с следующим сообщением пользователя.
+  chat.abort(context).catch(() => {});   // недоделанный до перезапуска ход главного сам не продолжается
+  const interrupted = Object.entries(store.items);
+  if (interrupted.length) {
+    for (const [key, rec] of interrupted) {
+      delete store.items[key];
+      (await harness.conversation(rec.conv, context).catch(() => null))?.abort(context).catch(() => {});
+      killHelperTree(rec);
+      rememberDone(rec);
+    }
+    saveStore();
+    const ns = interrupted.map(([, r]) => `#${r.n} «${r.title}»`).join(", ");
+    feed.addService(`Не доделаны и сами не продолжат: ${ns}. Напишите, если продолжить.`);
+    pendingNotes.push(`[Система] Помощники ${ns} были прерваны (перезапуск pia или лимит) и сами не продолжают. Продолжай их только если пользователь попросит (helper с continue: N).`);
+  }
   flushReports();
 
   return {
