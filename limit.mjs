@@ -45,6 +45,8 @@ export function limitResetAt(text, now = Date.now()) {
   if ((m = s.match(/retry-after-ms\W{1,6}(\d+(?:\.\d+)?)/i))) cands.push(now + Number(m[1]));
   else if ((m = s.match(/retry-after\W{1,6}(\d+(?:\.\d+)?)\b/i))) cands.push(now + Number(m[1]) * 1000);
   else if ((m = s.match(/retry-after\W{1,6}([A-Za-z]{3},[^"',}]+)/i))) cands.push(parseWhen(m[1], now));
+  // pi-ai: «Server requested 13018s retry delay (max: 60s). 429 …»
+  for (const r of s.matchAll(/requested\s+(\d+(?:\.\d+)?)\s*s\s+retry delay/gi)) cands.push(now + Number(r[1]) * 1000);
   for (const r of s.matchAll(/anthropic-ratelimit-[\w-]*?reset\W{1,6}([^\s"',}]+)/gi)) cands.push(parseWhen(r[1], now));
   for (const r of s.matchAll(/resets?(?:\s*at)?\W{1,6}([^\s"',}]+)/gi)) cands.push(parseWhen(r[1], now));   // «resets at …», resetsAt
   if ((m = s.match(/limit reached\W{1,4}(\d{10,13})/i))) cands.push(parseWhen(m[1], now));
