@@ -28,11 +28,12 @@ struct ChatView: View {
                     .overlay(alignment: .top) {
                         GrabStrip().frame(height: ChatView.dragStrip)
                     }
-                    // как у Raycast: лента плавно исчезает под полем ввода
-                    .overlay(alignment: .bottom) {
-                        LinearGradient(colors: [Theme.windowBg.opacity(0), Theme.windowBg], startPoint: .top, endPoint: .bottom)
-                            .frame(height: 26)
-                            .allowsHitTesting(false)
+                    // как у Raycast: лента плавно исчезает под полем ввода (маской — фон окна размытый, заливка цветом дала бы полосу)
+                    .mask {
+                        VStack(spacing: 0) {
+                            Rectangle()
+                            LinearGradient(colors: [.black, .black.opacity(0)], startPoint: .top, endPoint: .bottom).frame(height: 26)
+                        }
                     }
                 bottom
             }

@@ -576,7 +576,16 @@ final class PiaBackgroundView: NSView {
         layer?.masksToBounds = true
         registerForDraggedTypes(PiaDrop.types)
         layer?.borderWidth = 0.5   // край как у Raycast AI Chat: 0.5 pt, почти незаметный
+        // фон как у Raycast Notes: размытие того, что под окном, + молочная подкраска (как в Perevod, bg=blur)
+        let fx = NSVisualEffectView(frame: bounds)
+        fx.material = .hudWindow; fx.blendingMode = .behindWindow; fx.state = .active
+        fx.autoresizingMask = [.width, .height]
+        addSubview(fx, positioned: .below, relativeTo: nil)
+        tint.frame = bounds; tint.autoresizingMask = [.width, .height]; tint.wantsLayer = true
+        addSubview(tint, positioned: .above, relativeTo: fx)
     }
+    private let tint = NSView()
+    static func tint(dark: Bool) -> NSColor { dark ? NSColor(white: 0.11, alpha: 0.7) : NSColor(white: 0.97, alpha: 0.72) }
     required init?(coder: NSCoder) { fatalError() }
     // приём перетаскивания всей карточкой (дети без своей регистрации отдают drag сюда)
     override func draggingEntered(_ s: NSDraggingInfo) -> NSDragOperation { PiaDrop.entered(s, where: "карточка") }
@@ -589,7 +598,8 @@ final class PiaBackgroundView: NSView {
     override var isOpaque: Bool { false }
     private var isDark: Bool { effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua }
     override func updateLayer() {
-        layer?.backgroundColor = Self.fill(dark: isDark).cgColor
+        layer?.backgroundColor = NSColor.clear.cgColor
+        tint.layer?.backgroundColor = Self.tint(dark: isDark).cgColor
         layer?.borderColor = (isDark ? NSColor(white: 1, alpha: 0.09) : NSColor(white: 0, alpha: 0.07)).cgColor
     }
     override func viewDidChangeEffectiveAppearance() {
