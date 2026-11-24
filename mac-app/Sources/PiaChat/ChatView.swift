@@ -60,7 +60,7 @@ struct ChatView: View {
     // MARK: лента
 
     private var signature: String {
-        "\(model.items.count)|\(model.items.last?.seq ?? 0)|\(model.items.last?.text.count ?? 0)|\(model.busy)"
+        "\(model.items.count)|\(model.items.last?.seq ?? 0)|\(model.items.last?.text.count ?? 0)|\(model.busy)|\(model.helpers.count)|\(model.helpersExpanded)"
     }
 
     private var feed: some View {
@@ -77,8 +77,10 @@ struct ChatView: View {
                             .id(it.seq)
                             .transition(.asymmetric(insertion: .opacity.combined(with: .offset(y: 10)), removal: .opacity))
                     }
-                    if model.busy {
-                        TypingDots(activity: model.activity, stopping: model.stopping).id("typing").transition(.opacity)
+                    // один спиннер на всё: занят я — мой лоадер (с помощниками — желейный, с путником);
+                    // свободен, но работают помощники — Jelly Triangle. Щелчок / ↓ — список помощников.
+                    if model.busy || !model.helpers.isEmpty {
+                        TypingDots(model: model).id("typing").transition(.opacity)
                     }
                     if model.items.isEmpty && model.connected == false {
                         Text("pia не запущена").font(.system(size: 13)).foregroundStyle(.secondary)
@@ -171,8 +173,6 @@ struct ChatView: View {
                 StatusLine(text: e)
             } else if let h = model.hint {
                 StatusLine(text: h)
-            } else if !model.helpers.isEmpty {
-                HelpersBar(model: model)
             } else if !Permissions.shared.accessibility && !Permissions.shared.wizardVisible {
                 PermissionsHintLine { model.onOpenPermissions() }
             }
@@ -415,12 +415,24 @@ struct ReportBlock: View {
 }
 
 struct TypingDots: View {
-    var activity: Activity
-    var stopping = false
+    @Bindable var model: ChatModel
     var body: some View {
-        ActivityLoader(activity: activity, dimmed: stopping)
-            .padding(.vertical, 6)
-            .frame(maxWidth: .infinity, alignment: .leading)
+        let n = model.helpers.count
+        VStack(alignment: .leading, spacing: 6) {
+            ActivityLoader(activity: model.busy ? model.activity : (n >= 3 ? .waiting : .pair), dimmed: model.busy && model.stopping, goo: model.busy && n > 0)
+                .help(n > 0 ? "\(model.busy ? model.activity.title + ", " : "")\(n) \(plural(n, "помощник", "помощника", "помощников")) — щелчок или ↓" : model.activity.title)
+                .onTapGesture { if n > 0 { withAnimation(.snappy(duration: 0.22)) { model.helpersExpanded.toggle() } } }
+            if model.helpersExpanded && n > 0 {
+                TimelineView(.periodic(from: .now, by: 1)) { ctx in
+                    VStack(alignment: .leading, spacing: 4) {
+                        ForEach(model.helpers) { h in HelperRow(h: h, now: ctx.date) }
+                    }
+                }
+                .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+        .padding(.vertical, 6)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 

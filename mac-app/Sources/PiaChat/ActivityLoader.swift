@@ -14,6 +14,8 @@ enum Activity: String, CaseIterable {
     case helpers     // помощники                     — Newton's Cradle
     case compacting  // сжимаю разговор               — Momentum
     case other       // прочие инструменты            — Dot Wave
+    case pair        // сам свободен, работают 1–2 помощника — Jelly
+    case waiting     // сам свободен, работают 3+ помощника — Jelly Triangle
 
     var title: String {
         switch self {
@@ -25,6 +27,7 @@ enum Activity: String, CaseIterable {
         case .helpers: "помощники"
         case .compacting: "сжимаю разговор"
         case .other: "работаю"
+        case .pair, .waiting: "работают помощники"
         }
     }
 
@@ -54,42 +57,79 @@ enum Activity: String, CaseIterable {
 struct ActivityLoader: View {
     var activity: Activity
     var dimmed = false                // «останавливаю» — тот же спиннер, но бледнее
+    var goo = false                   // работают помощники — точки желейные (см. LoaderShape.goo)
     var dot: CGFloat = 3.2            // диаметр точки (у старого 3×3 было 3)
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    /// «думаю» ↔ «пишу ответ»: три точки Trio перетекают в строку Dot Pulse (и обратно), а не сменяются
-    @State private var morph: (from: Activity, at: Date, order: [Int])?
+    /// Любая смена состояния — точки перетекают из старого вида в новый (а не растворяются)
+    @State private var morph: (from: Activity, fromGoo: Bool, at: Date)?
     static let morphSeconds = 0.5
+    static let box = CGSize(width: 30, height: 14)
 
-    private static func isTalk(_ a: Activity) -> Bool { a == .thinking || a == .writing }
+    private struct Key: Equatable { var a: Activity; var goo: Bool }
 
     var body: some View {
         Group {
             if reduceMotion {
-                LoaderShape(activity: activity, dot: dot, t: 0)
+                LoaderShape(activity: activity, dot: dot, t: 0, goo: goo)
             } else {
                 TimelineView(.animation(minimumInterval: 1.0 / 60)) { ctx in
                     let t = ctx.date.timeIntervalSinceReferenceDate
-                    if let m = morph, Self.isTalk(activity), ctx.date.timeIntervalSince(m.at) < Self.morphSeconds {
-                        let k = ctx.date.timeIntervalSince(m.at) / Self.morphSeconds
-                        TalkMorph(dot: dot, t: t, toWriting: activity == .writing, k: k, order: m.order)
-                    } else {
-                        LoaderShape(activity: activity, dot: dot, t: t)
-                    }
+                    let k = morph.map { min(1, ctx.date.timeIntervalSince($0.at) / Self.morphSeconds) } ?? 1
+                    MorphFrame(from: morph.map { ($0.from, $0.fromGoo) } ?? (activity, goo), to: (activity, goo), k: k, dot: dot, t: t)
                 }
             }
         }
-        .id(Self.isTalk(activity) ? "talk" : activity.rawValue)   // пара думаю/пишу — один вид, без растворения
-        .transition(.asymmetric(insertion: .opacity.combined(with: .scale(scale: 0.6)), removal: .opacity))
-        .onChange(of: activity) { old, new in
-            guard Self.isTalk(old), Self.isTalk(new) else { morph = nil; return }
-            morph = (old, Date(), TalkMorph.order(dot: dot, t: Date().timeIntervalSinceReferenceDate))
-        }
+        .onChange(of: Key(a: activity, goo: goo)) { old, _ in morph = (old.a, old.goo, Date()) }
         .opacity(dimmed ? 0.4 : 1)
         .frame(width: 30, height: 14, alignment: .leading)
         .contentShape(Rectangle())
         .help(dimmed ? "останавливаю" : activity.title)
         .accessibilityLabel(dimmed ? "останавливаю" : activity.title)
+    }
+}
+
+/// Кадр: точки состояния «from» перетекают в «to» (k 0…1, плавно). Пары — по порядку слева направо;
+/// лишние точки большего набора стягиваются к ближайшей паре (с ooze — капля делится/сливается).
+struct MorphFrame: View {
+    var from: (Activity, Bool)
+    var to: (Activity, Bool)
+    var k: Double
+    var dot: CGFloat
+    var t: Double
+
+    static func blobby(_ a: Activity, _ goo: Bool) -> Bool { goo || a == .pair || a == .waiting }
+
+    var body: some View {
+        Canvas { gc, _ in
+            let B = L.points(to.0, goo: to.1, dot: dot, t: t)
+            var pts = B
+            if k < 1 {
+                let A = L.points(from.0, goo: from.1, dot: dot, t: t).sorted { $0.0.x < $1.0.x }
+                let Bs = B.sorted { $0.0.x < $1.0.x }
+                let n = max(A.count, Bs.count), e = k * k * (3 - 2 * k)
+                pts = []
+                if !A.isEmpty && !Bs.isEmpty {
+                    for i in 0..<n {
+                        let a = A[min(A.count - 1, i * A.count / n)], b = Bs[min(Bs.count - 1, i * Bs.count / n)]
+                        pts.append((CGPoint(x: a.0.x + (b.0.x - a.0.x) * e, y: a.0.y + (b.0.y - a.0.y) * e),
+                                    a.1 + (b.1 - a.1) * e, a.2 + (b.2 - a.2) * e))
+                    }
+                }
+            }
+            let goo = Self.blobby(to.0, to.1) || (k < 1 && Self.blobby(from.0, from.1))
+            if goo {
+                L.ooze(&gc, dot: dot) { g in
+                    for (c, d, _) in pts where d > 0.05 { g.fill(Path(ellipseIn: CGRect(x: c.x - d / 2, y: c.y - d / 2, width: d, height: d)), with: .color(.black)) }
+                }
+            } else {
+                for (c, d, o) in pts where d > 0.05 {
+                    gc.fill(Path(ellipseIn: CGRect(x: c.x - d / 2, y: c.y - d / 2, width: d, height: d)), with: .color(LoaderShape.color.opacity(o)))
+                }
+            }
+        }
+        .frame(width: ActivityLoader.box.width, height: ActivityLoader.box.height)
+        .opacity(0.66)
     }
 }
 
@@ -142,11 +182,14 @@ struct LoaderShape: View {
     var activity: Activity
     var dot: CGFloat
     var t: Double
+    /// работают помощники: точки «желейные» (сливаются, как Jelly из ldrs), вокруг ходит точка-путник
+    var goo = false
 
     static let color = Color.primary
 
     /// Сторона S лоадера в CSS и пропорции рамки (ширина × высота в долях S)
-    private var spec: (s: CGFloat, w: CGFloat, h: CGFloat) {
+    private var spec: (s: CGFloat, w: CGFloat, h: CGFloat) { Self.spec(activity, dot: dot) }
+    static func spec(_ activity: Activity, dot: CGFloat) -> (s: CGFloat, w: CGFloat, h: CGFloat) {
         switch activity {
         case .thinking: (dot / 0.25, 1, 1)
         case .writing: (dot / 0.24, 1, 0.24)
@@ -156,14 +199,23 @@ struct LoaderShape: View {
         case .helpers: (dot / 0.1275, 1, 0.3)
         case .compacting: (dot / 0.25, 1, 1)
         case .other: (dot / 0.17, 1, 0.5)
+        case .pair: (dot * 3.6, 1, 1)
+        case .waiting: (dot * 3.6, 1, 1)
         }
     }
 
     var body: some View {
         let sp = spec
-        Canvas { gc, _ in
+        Canvas { gc, size in
             var dots: [(CGPoint, CGFloat, Double)] = []   // центр, диаметр, прозрачность
             L.draw(activity, s: sp.s, t: t) { dots.append(($0, $1, $2)) }
+            if goo || activity == .waiting || activity == .pair {
+                if goo && activity != .waiting && activity != .pair { dots.append(L.traveler(size, dot: dot, t: t)) }
+                L.ooze(&gc, dot: dot) { g in
+                    for (c, d, _) in dots where d > 0.05 { g.fill(Path(ellipseIn: CGRect(x: c.x - d / 2, y: c.y - d / 2, width: d, height: d)), with: .color(.black)) }
+                }
+                return
+            }
             for (c, d, o) in dots where d > 0.05 {
                 gc.fill(Path(ellipseIn: CGRect(x: c.x - d / 2, y: c.y - d / 2, width: d, height: d)),
                         with: .color(Self.color.opacity(o)))
@@ -189,7 +241,62 @@ enum L {
         case .helpers: newtonsCradle(S, t, put)
         case .compacting: momentum(S, t, put)
         case .other: dotWave(S, t, put)
+        case .pair: jelly(S, t, put)
+        case .waiting: jellyTriangle(S, t, put)
         }
+    }
+
+    /// «Ooze» как в ldrs Jelly: размытие + порог прозрачности — близкие точки сливаются каплей
+    static func ooze(_ gc: inout GraphicsContext, dot: CGFloat, _ draw: (inout GraphicsContext) -> Void) {
+        gc.addFilter(.alphaThreshold(min: 0.5, color: LoaderShape.color))
+        gc.addFilter(.blur(radius: max(0.8, dot * 0.32)))
+        gc.drawLayer { l in draw(&l) }
+    }
+
+    /// точка-путник (помощники работают, пока я занят): обходит лоадер по вытянутому кругу, сливаясь с точками
+    static func traveler(_ size: CGSize, dot: CGFloat, t: Double) -> (CGPoint, CGFloat, Double) {
+        let a = phase(t, 2.2) * 2 * .pi
+        let c = CGPoint(x: size.width / 2 + size.width * 0.42 * cos(a), y: size.height / 2 + size.height * 0.42 * sin(a))
+        return (c, dot, 1)
+    }
+
+    // Jelly: size 40, speed 0.9. Две точки в центре расходятся на ±75% диаметра и обратно (через ooze — капля делится
+    // и сливается); каждые полцикла всё поворачивается на 90°. Размер точек постоянный (= dot).
+    static func jelly(_ S: CGFloat, _ t: Double, _ put: Put) {
+        let speed = 0.9, d = S / 3.6, c = CGPoint(x: S / 2, y: S / 2)
+        let ph = phase(t, speed)
+        let k = keys(ph, [(0, 0, .ease), (0.5, 0.75, .ease), (1, 0, .linear)])
+        let vertical = phase(t, speed * 2) >= 0.5
+        for sgn in [-1.0, 1.0] {
+            let off = d * k * sgn
+            put(vertical ? CGPoint(x: c.x, y: c.y + off) : CGPoint(x: c.x + off, y: c.y), d, 1)
+        }
+    }
+
+    /// Точки состояния в общей рамке 30×14 (слева, по центру по высоте) — для плавных переходов между любыми состояниями
+    static func points(_ a: Activity, goo: Bool, dot: CGFloat, t: Double) -> [(CGPoint, CGFloat, Double)] {
+        let sp = LoaderShape.spec(a, dot: dot)
+        let w = sp.s * sp.w, h = sp.s * sp.h, dy = (ActivityLoader.box.height - h) / 2
+        var out: [(CGPoint, CGFloat, Double)] = []
+        draw(a, s: sp.s, t: t) { out.append((CGPoint(x: $0.x, y: $0.y + dy), $1, $2)) }
+        if goo && a != .pair && a != .waiting {
+            let tr = traveler(CGSize(width: w, height: h), dot: dot, t: t)
+            out.append((CGPoint(x: tr.0.x, y: tr.0.y + dy), tr.1, tr.2))
+        }
+        return out
+    }
+
+    // Jelly Triangle: size 30, speed 1.75. Три точки S/3 в углах треугольника «дышат» (×1.5 → 0 → ×1.5, сдвиг по 1/3),
+    // путник обходит углы; всё через ooze — точки слипаются.
+    static func jellyTriangle(_ S: CGFloat, _ t: Double, _ put: Put) {
+        let speed = 1.75, d = S / 3.6   // все точки одного размера (= dot), без «дыхания» углов
+        let top = CGPoint(x: S / 2, y: d / 2), br = CGPoint(x: S - d / 2, y: S - d / 2), bl = CGPoint(x: d / 2, y: S - d / 2)
+        for p in [top, br, bl] { put(p, d, 1) }
+        let ph = phase(t, speed)
+        let path: [CGPoint] = [top, br, bl, top]
+        let seg = min(2, Int(ph * 3)), u = Bezier.ease.y(ph * 3 - Double(seg))
+        let a = path[seg], b = path[seg + 1]
+        put(CGPoint(x: a.x + (b.x - a.x) * u, y: a.y + (b.y - a.y) * u), d, 1)
     }
 
     /// фаза 0..1 с CSS-задержкой (отрицательная задержка = сдвиг вперёд)
