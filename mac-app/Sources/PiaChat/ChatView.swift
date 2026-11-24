@@ -184,10 +184,10 @@ struct ChatView: View {
             }
             // ввод как в терминале: без капсулы, только мигающий курсор; пока есть текст — слева полоса «моё сообщение»
             // (место под полосу занято всегда, чтобы текст не прыгал). Откат — backups/pia.app.before-cursor-input-*
-            HStack(alignment: .top, spacing: 11) {
+            HStack(alignment: .top, spacing: 6) {
                 Capsule()
-                    .fill(Theme.bubble)
-                    .frame(width: 3)
+                    .fill(Color.primary.opacity(0.22))
+                    .frame(width: 1.5)
                     .padding(.vertical, 3)
                     .opacity(model.draft.isEmpty ? 0 : 1)
                     .animation(.easeOut(duration: 0.15), value: model.draft.isEmpty)
