@@ -435,10 +435,9 @@ struct HelpersBar: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
             HStack(spacing: 7) {
-                PulseDot()
-                Text("\(model.helpers.count) \(plural(model.helpers.count, "работяга", "работяги", "работяг"))")
-                    .font(.system(size: 12))
-                    .foregroundStyle(Theme.muted)
+                // без надписи: число работяг = число «желейных» точек (до 3); список — ↓, щелчок или наведение
+                JellyDots(count: model.helpers.count)
+                    .help("\(model.helpers.count) \(plural(model.helpers.count, "работяга", "работяги", "работяг")) — ↓ показать")
                 Spacer()
             }
             if expanded {
@@ -472,6 +471,45 @@ struct HelperRow: View {
             Spacer(minLength: 8)
             Text(workTime(h.startMs, now)).font(.system(size: 12).monospacedDigit()).foregroundStyle(Theme.faint).lineLimit(1)
         }
+    }
+}
+
+/// Работяги: желейные точки (как Jelly из ldrs) — 1 точка дышит и чуть сплющивается, 2–3 отпочковываются от общей капли,
+/// кружат и снова сливаются (метаболы: размытие + порог прозрачности). Больше трёх не рисуем.
+struct JellyDots: View {
+    var count: Int
+    var body: some View {
+        let n = max(1, min(3, count))
+        TimelineView(.animation(minimumInterval: 1 / 60)) { ctx in
+            let t = ctx.date.timeIntervalSinceReferenceDate
+            Canvas { gc, size in
+                let c = CGPoint(x: size.width / 2, y: size.height / 2)
+                gc.addFilter(.alphaThreshold(min: 0.5, color: Color.primary.opacity(0.5)))
+                gc.addFilter(.blur(radius: 1.6))
+                gc.drawLayer { l in
+                    let d: CGFloat = 6
+                    if n == 1 {
+                        let w = sin(t * 2 * .pi / 1.4)
+                        let sx = d * (1 + 0.14 * w), sy = d * (1 - 0.14 * w)
+                        l.fill(Path(ellipseIn: CGRect(x: c.x - sx / 2, y: c.y - sy / 2, width: sx, height: sy)), with: .color(.black))
+                    } else {
+                        // расхождение 0→1→0 с паузой «вместе», всё медленно вращается
+                        let ph = (t / 2.4).truncatingRemainder(dividingBy: 1)
+                        let spread = CGFloat(max(0, sin(ph * 2 * .pi))) * 0.35 + 0.65
+                        let r: CGFloat = 5.2 * spread
+                        let spin = t * 2 * .pi / 3.2
+                        for i in 0..<n {
+                            let a = spin + Double(i) * 2 * .pi / Double(n)
+                            let p = CGPoint(x: c.x + r * cos(a), y: c.y + r * sin(a))
+                            l.fill(Path(ellipseIn: CGRect(x: p.x - d / 2, y: p.y - d / 2, width: d, height: d)), with: .color(.black))
+                        }
+                        l.fill(Path(ellipseIn: CGRect(x: c.x - 2, y: c.y - 2, width: 4, height: 4)), with: .color(.black))
+                    }
+                }
+            }
+        }
+        .frame(width: 22, height: 18)
+        .animation(.snappy(duration: 0.3), value: n)
     }
 }
 
