@@ -510,14 +510,14 @@ struct AttachmentsRow: View {
                 ForEach(model.attachments) { a in
                     switch a {
                     case .image(_, let p):
-                        Thumb(path: p, maxPixel: 200, height: 46, maxWidth: 90, corner: 8)
+                        Thumb(path: p, maxPixel: 200, height: ContextPill.height, maxWidth: 64, corner: ContextPill.height / 2)
                             .onTapGesture { withAnimation(.easeOut(duration: 0.15)) { model.zoomImage = p } }
                             .transition(.scale(scale: 0.8).combined(with: .opacity))
                     case .context(_, let c):
                         HStack(spacing: 6) {
                             ContextPill(label: ContextFormat.label(c), bundleId: c.bundleId, compact: false)
                             if let s = c.screenshotPath, FileManager.default.fileExists(atPath: s) {
-                                Thumb(path: s, maxPixel: 200, height: 30, maxWidth: 54, corner: 6)
+                                Thumb(path: s, maxPixel: 200, height: ContextPill.height, maxWidth: 64, corner: ContextPill.height / 2)
                                     .onTapGesture { withAnimation(.easeOut(duration: 0.15)) { model.zoomImage = s } }
                             }
                         }
@@ -531,6 +531,7 @@ struct AttachmentsRow: View {
 }
 
 struct ContextPill: View {
+    static let height: CGFloat = 28
     let label: String
     let bundleId: String?
     var compact: Bool
@@ -552,7 +553,8 @@ struct ContextPill: View {
                 .modifier(CappedWidth(max: 360))
         }
         .padding(.horizontal, 9)
-        .padding(.vertical, compact ? 4 : 6)
+        .padding(.vertical, compact ? 4 : 0)
+        .frame(height: compact ? nil : Self.height)   // над курсором — высота как у миниатюр (один ряд вровень)
         .background(Capsule().fill(Color.primary.opacity(compact ? 0.06 : 0.08)))
         .overlay(Capsule().strokeBorder(Color.primary.opacity(0.07)))
         .help(label)
