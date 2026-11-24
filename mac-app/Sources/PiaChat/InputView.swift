@@ -81,7 +81,7 @@ struct InputView: NSViewRepresentable {
     var maxHeight: CGFloat
     var onEscape: () -> Void
 
-    static let font = NSFont.systemFont(ofSize: 14)
+    static let font = NSFont.systemFont(ofSize: 14.5)
     static var lineHeight: CGFloat { ceil(font.ascender - font.descender + font.leading) + 2 }
     static let inset = NSSize(width: 0, height: 5)
     static var minHeight: CGFloat { lineHeight + inset.height * 2 }

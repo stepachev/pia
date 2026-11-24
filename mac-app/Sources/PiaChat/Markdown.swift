@@ -157,7 +157,7 @@ enum MarkdownParser {
 
 struct MarkdownView: View, Equatable {
     let text: String
-    var size: CGFloat = 13.5
+    var size: CGFloat = 14.5
     var secondary = false
     /// false — текст не выделяется и не перехватывает мышь (свёрнутый отчёт раскрывается щелчком)
     var selectable = true
@@ -170,20 +170,30 @@ struct MarkdownView: View, Equatable {
 
     var body: some View {
         let blocks = MarkdownParser.parse(text)
-        VStack(alignment: .leading, spacing: 7) {
-            ForEach(Array(blocks.enumerated()), id: \.offset) { _, b in
-                block(b)
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(blocks.enumerated()), id: \.offset) { i, b in
+                block(b).padding(.top, i == 0 ? 0 : Self.gap(blocks[i - 1], b))
             }
         }
         .foregroundStyle(secondary ? AnyShapeStyle(.secondary) : AnyShapeStyle(.primary))
         .tint(.primary)
     }
 
+    /// Отступ между блоками: абзацы разделены заметно сильнее строк, заголовок отделён сверху и прижат к своему разделу,
+    /// пункты одного списка — плотно.
+    static func gap(_ prev: MDBlock, _ cur: MDBlock) -> CGFloat {
+        if case .heading = cur { return 20 }
+        if case .heading = prev { return 5 }
+        if case .listItem = prev, case .listItem = cur { return 6 }
+        return 13
+    }
+
     private func inline(_ s: String, _ sz: CGFloat? = nil) -> Text {
         Text(MarkdownParser.inline(s, size: sz ?? size))
     }
 
-    private var baseColor: NSColor { secondary ? .secondaryLabelColor : .labelColor }
+    /// Основной текст чуть мягче чёрного (меньше режет глаз), заголовки — полным цветом
+    private var baseColor: NSColor { secondary ? .secondaryLabelColor : .labelColor.withAlphaComponent(0.8) }
 
     /// Абзацы, заголовки, пункты, цитаты — NSTextView (курсор «рука» над ссылками), см. MessageText.swift
     private func textBlock(_ s: String, size sz: CGFloat, weight: NSFont.Weight = .regular, color: NSColor? = nil, lineSpacing: CGFloat = 0) -> MessageText {
@@ -193,17 +203,16 @@ struct MarkdownView: View, Equatable {
     @ViewBuilder private func block(_ b: MDBlock) -> some View {
         switch b {
         case .heading(let level, let s):
-            textBlock(s, size: level <= 1 ? size + 4 : level == 2 ? size + 2 : size + 0.5, weight: .semibold)
-                .padding(.top, 4)
+            textBlock(s, size: level <= 1 ? size + 4 : level == 2 ? size + 2 : size + 0.5, weight: .semibold, color: secondary ? nil : .labelColor)
         case .paragraph(let s):
-            textBlock(s, size: size, lineSpacing: 2.5)
+            textBlock(s, size: size, lineSpacing: 4.5)
         case .listItem(let indent, let marker, let s):
             HStack(alignment: .firstTextBaseline, spacing: 7) {
                 Text(marker)
                     .font(.system(size: marker == "•" ? size : size - 0.5, weight: marker == "•" ? .regular : .medium).monospacedDigit())
                     .foregroundStyle(.secondary)
                     .frame(minWidth: 12, alignment: marker == "•" ? .center : .trailing)
-                textBlock(s, size: size, lineSpacing: 2.5)
+                textBlock(s, size: size, lineSpacing: 4.5)
                     .alignmentGuide(.firstTextBaseline) { _ in MDAttr.baseline(size: size) }
             }
             .padding(.leading, CGFloat(indent) * 18)

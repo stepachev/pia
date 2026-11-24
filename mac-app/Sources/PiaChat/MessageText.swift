@@ -5,6 +5,26 @@ import SwiftUI
 // (SwiftUI Text с textSelection ставит I-beam на весь текст и геометрию ссылок не отдаёт).
 // Строчная разметка та же (AttributedString(markdown:)), шрифты/цвета/интервалы — как были у Text.
 
+/// Типограф: неразрывные пробелы, чтобы предлоги и союзы не висели в конце строки,
+/// тире не начинало строку, частицы «бы, ли, же» не отрывались, число держалось за следующее слово. Код и ссылки не трогаем.
+enum Typograph {
+    private static let rules: [(NSRegularExpression, String)] = [
+        (#"(?<=^|[\s(«"„])([а-яёa-z]{1,2}|для|без|под|над|при|про|или|что|как|вот|все|ещё|уже) "#, "$1\u{00A0}"),
+        (#" (—|–)"#, "\u{00A0}$1"),
+        (#" (бы|ли|же|ль|ж)(?=[\s.,!?;:)»]|$)"#, "\u{00A0}$1"),
+        (#"(?<=\d) (?=\S)"#, "\u{00A0}"),
+    ].map { (try! NSRegularExpression(pattern: $0.0, options: [.caseInsensitive]), $0.1) }
+
+    static func apply(_ s: String) -> String {
+        guard s.contains(" ") else { return s }
+        var t = s
+        for (re, tpl) in rules {
+            t = re.stringByReplacingMatches(in: t, range: NSRange(t.startIndex..., in: t), withTemplate: tpl)
+        }
+        return t
+    }
+}
+
 enum MDAttr {
     private static let measureLM = NSLayoutManager()
     /// Базовая линия первой строки от верха (TextKit 1, системный шрифт) — для выравнивания с маркером списка
@@ -39,7 +59,9 @@ enum MDAttr {
                 attrs[.foregroundColor] = NSColor.labelColor
                 attrs[.underlineStyle] = NSUnderlineStyle.single.rawValue
             }
-            out.append(NSAttributedString(string: String(a[run.range].characters), attributes: attrs))
+            let piece = String(a[run.range].characters)
+            let typo = intent.contains(.code) || run.link != nil ? piece : Typograph.apply(piece)
+            out.append(NSAttributedString(string: typo, attributes: attrs))
         }
         return out
     }
@@ -49,6 +71,22 @@ enum MDAttr {
 final class PiaTextView: NSTextView {
     var selectableText = true { didSet { isSelectable = selectableText } }
     private var lastMeasure: (width: CGFloat, size: NSSize)?
+
+    /// Копирование (и перетаскивание) без неразрывных пробелов типографа: в буфер уходят обычные пробелы
+    override func writeSelection(to pboard: NSPasteboard, types: [NSPasteboard.PasteboardType]) -> Bool {
+        guard let storage = textStorage else { return super.writeSelection(to: pboard, types: types) }
+        let out = NSMutableAttributedString()
+        for r in selectedRanges.map(\.rangeValue) where r.length > 0 && NSMaxRange(r) <= storage.length {
+            if out.length > 0 { out.append(NSAttributedString(string: "\n")) }
+            out.append(storage.attributedSubstring(from: r))
+        }
+        guard out.length > 0 else { return false }
+        out.mutableString.replaceOccurrences(of: "\u{00A0}", with: " ", options: [], range: NSRange(location: 0, length: out.length))
+        pboard.clearContents()
+        var ok = pboard.setString(out.string, forType: .string)
+        if let rtf = out.rtf(from: NSRange(location: 0, length: out.length), documentAttributes: [:]) { ok = pboard.setData(rtf, forType: .rtf) || ok }
+        return ok
+    }
 
     static func make() -> PiaTextView {
         let storage = NSTextStorage()

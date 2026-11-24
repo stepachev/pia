@@ -312,8 +312,8 @@ struct MessageRow: View, Equatable {
                 }
                 if !parts.body.isEmpty {
                     Text(verbatim: parts.body)
-                        .font(.system(size: 13.5))
-                        .lineSpacing(2.5)
+                        .font(.system(size: 14.5))
+                        .lineSpacing(4.5)
                         .textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
                         .foregroundStyle(.white)
@@ -331,6 +331,7 @@ struct MessageRow: View, Equatable {
         VStack(alignment: .leading, spacing: 8) {
             if !item.images.isEmpty { ImagesStrip(paths: item.images, height: 140, onZoom: onZoom) }
             MarkdownView(text: item.text, onZoom: onZoom)
+                .frame(maxWidth: 600, alignment: .leading) // строка не длиннее ~75 знаков в широком окне
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.trailing, 40)
@@ -393,9 +394,9 @@ struct ReportBlock: View {
             .onTapGesture { withAnimation(.snappy(duration: 0.25)) { expanded.toggle() } }
             Group {
                 if expanded {
-                    MarkdownView(text: body_, size: 13, secondary: true, onZoom: onZoom)
+                    MarkdownView(text: body_, size: 14, secondary: true, onZoom: onZoom)
                 } else {
-                    MarkdownView(text: body_, size: 13, secondary: true, selectable: false)
+                    MarkdownView(text: body_, size: 14, secondary: true, selectable: false)
                         .frame(maxHeight: 62, alignment: .top)
                         .clipped()
                         .mask(LinearGradient(stops: [.init(color: .black, location: 0), .init(color: .black, location: 0.55), .init(color: .clear, location: 1)], startPoint: .top, endPoint: .bottom))
