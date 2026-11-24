@@ -71,6 +71,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var panel: PiaPanel!
     var shiftMonitor: RightShiftDoubleTapMonitor?
     var optionMonitor: RightOptionDoubleTapMonitor?
+    var edgeMonitor: EdgeHoverMonitor?
+    /// окно выехало от правого края: место не запоминаем, прячется обратно вправо
+    var edgeShown = false
+    private var edgeAnimating = false
+    var edgeItem: NSMenuItem?
     private var optionItem: NSMenuItem?
     private var capturing = false
     private var activity: NSObjectProtocol?   // пока окно видно — без App Nap (опрос и анимации не замедляются)
@@ -116,6 +121,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         if RightOptionDoubleTapMonitor.isEnabled && !TestHooks.offscreen { optionMonitor?.start() }
         Log.write("двойной правый Option: \(RightOptionDoubleTapMonitor.isEnabled ? "включён" : "выключен")")
+
+        edgeMonitor = EdgeHoverMonitor { [weak self] in
+            DispatchQueue.main.async {
+                guard let self, !self.isFocused else { return }
+                self.show(source: "правый край экрана", fromEdge: true)
+            }
+        }
+        if EdgeHoverMonitor.isEnabled && !TestHooks.offscreen { edgeMonitor?.start() }
+        Log.write("правый край экрана: \(EdgeHoverMonitor.isEnabled ? "включён" : "выключен")")
 
         // Прятать окно — только когда пользователь реально перешёл в другое приложение
         NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didActivateApplicationNotification,
@@ -257,6 +271,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     @objc func toggleOptionHotkey() { setOptionHotkey(!RightOptionDoubleTapMonitor.isEnabled) }
 
+    @objc func toggleEdgeHover() {
+        let on = !EdgeHoverMonitor.isEnabled
+        EdgeHoverMonitor.isEnabled = on
+        if on { edgeMonitor?.start() } else { edgeMonitor?.stop() }
+        edgeItem?.state = on ? .on : .off
+        Log.write("правый край экрана: \(on ? "включён" : "выключен")")
+    }
+
     // MARK: разрешения
 
     /// Показать мастер разрешений (⌘, , «/разрешения», pia://permissions, перезапуск из мастера).
@@ -370,7 +392,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     /// Окно двинули (перетаскивание, размер за верх/лево) — запомнить, где стоит карточка
     func windowDidMove(_ n: Notification) {
-        guard let panel, panel.isVisible, !TestHooks.offscreen else { return }
+        guard let panel, panel.isVisible, !TestHooks.offscreen, !edgeAnimating else { return }
+        edgeShown = false   // окно передвинули руками — дальше обычное поведение
         let o = panel.cardFrame.origin
         UserDefaults.standard.set(o.x, forKey: "pia.window.x")
         UserDefaults.standard.set(o.y, forKey: "pia.window.y")
@@ -393,12 +416,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         panel.setFrameOrigin(NSPoint(x: card.minX - m, y: card.minY - m))
     }
 
-    func show(source: String = "") {
+    /// Место окна у правого края, по центру высоты (карточка с зазором от края)
+    private func edgeOrigin() -> NSPoint? {
+        let mouse = NSEvent.mouseLocation
+        guard let vf = (NSScreen.screens.first { NSMouseInRect(mouse, $0.frame.insetBy(dx: -2, dy: 0), false) } ?? NSScreen.main)?.visibleFrame else { return nil }
+        let s = panel.frame.size, m = PiaPanel.margin
+        return NSPoint(x: round(vf.maxX - s.width + m - 14), y: round(vf.midY - s.height / 2))
+    }
+
+    func show(source: String = "", fromEdge: Bool = false) {
         guard let panel else { return }
         hideGen += 1                         // отменяет незавершённое скрытие
         let wasVisible = panel.isVisible && panel.alphaValue > 0.99
+        var slideTo: NSPoint?
         if !panel.isVisible {
-            placePanel()
+            if fromEdge, let o = edgeOrigin() {
+                edgeAnimating = true
+                panel.setFrameOrigin(NSPoint(x: o.x + 90, y: o.y))   // старт правее, у самого края
+                slideTo = o
+                edgeShown = true
+            } else {
+                edgeShown = false
+                placePanel()
+            }
             panel.alphaValue = 0
         }
         panel.ignoresMouseEvents = false
@@ -428,7 +468,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 Log.write("окно: key=\(self.panel.isKeyWindow), pia впереди=\(self.isFrontmost)")
             }
         }
-        if !wasVisible {
+        if let to = slideTo {
+            // «выскакивает» из края: едет влево с лёгким перелётом и проявляется
+            NSAnimationContext.runAnimationGroup({ ctx in
+                ctx.duration = 0.32
+                ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.2, 1.25, 0.35, 1)
+                panel.animator().setFrame(NSRect(origin: to, size: panel.frame.size), display: true)
+                panel.animator().alphaValue = 1
+            }, completionHandler: { [weak self] in
+                Task { @MainActor in self?.edgeAnimating = false }
+            })
+            model.scrollToBottomToken += 1
+        } else if !wasVisible {
             NSAnimationContext.runAnimationGroup { ctx in
                 ctx.duration = 0.14
                 panel.animator().alphaValue = 1
@@ -465,8 +516,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         perms.stopWatching()
         stopPassThrough()
         if let a = activity { ProcessInfo.processInfo.endActivity(a); activity = nil }
+        let toEdge = edgeShown
+        if toEdge { edgeAnimating = true }
         NSAnimationContext.runAnimationGroup({ ctx in
-            ctx.duration = 0.1
+            ctx.duration = toEdge ? 0.18 : 0.1
+            if toEdge {
+                ctx.timingFunction = CAMediaTimingFunction(name: .easeIn)
+                panel.animator().setFrameOrigin(NSPoint(x: panel.frame.minX + 70, y: panel.frame.minY))   // уезжает обратно в край
+            }
             panel.animator().alphaValue = 0
         }, completionHandler: { [weak self] in
             Task { @MainActor in
@@ -474,6 +531,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 guard let self, gen == self.hideGen else { return }
                 self.panel.orderOut(nil)
                 self.panel.alphaValue = 1
+                self.edgeAnimating = false
                 if NSApp.isActive { NSApp.hide(nil) }   // фокус возвращается в прежнее приложение
             }
         })
@@ -523,6 +581,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         oi.target = self
         oi.state = RightOptionDoubleTapMonitor.isEnabled ? .on : .off
         optionItem = oi
+        let ei = appMenu.addItem(withTitle: "Открывать у правого края экрана", action: #selector(toggleEdgeHover), keyEquivalent: "")
+        ei.target = self
+        ei.state = EdgeHoverMonitor.isEnabled ? .on : .off
+        edgeItem = ei
         appMenu.addItem(withTitle: "Разрешения…", action: #selector(permissionsAction), keyEquivalent: ",").target = self
         appMenu.addItem(withTitle: "Выйти из pia", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         appItem.submenu = appMenu
