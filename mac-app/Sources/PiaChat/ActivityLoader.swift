@@ -291,9 +291,13 @@ enum L {
     // Jelly Triangle: size 30, speed 1.75. Три точки S/3 в углах треугольника «дышат» (×1.5 → 0 → ×1.5, сдвиг по 1/3),
     // путник обходит углы; всё через ooze — точки слипаются.
     static func jellyTriangle(_ S: CGFloat, _ t: Double, _ put: Put) {
-        let speed = 1.75, d = S / 3.6   // все точки одного размера (= dot), без «дыхания» углов
+        let speed = 1.75, d = S / 3.6
         let top = CGPoint(x: S / 2, y: d / 2), br = CGPoint(x: S - d / 2, y: S - d / 2), bl = CGPoint(x: d / 2, y: S - d / 2)
-        for p in [top, br, bl] { put(p, d, 1) }
+        // как в оригинале ldrs: углы «дышат» ×1.5 → 0 → ×1.5 со сдвигом по 1/3 — капля перетекает по кругу
+        let grow: [(Double, Double, Bezier)] = [(0, 1.5, .ease), (0.5, 0, .ease), (0.6, 0, .ease), (0.85, 1.5, .linear), (1, 1.5, .linear)]
+        for (p, dl) in [(top, 0.0), (br, 0.666), (bl, 0.333)] {
+            put(p, d * keys(phase(t, speed, delay: -dl * speed), grow), 1)
+        }
         let ph = phase(t, speed)
         let path: [CGPoint] = [top, br, bl, top]
         let seg = min(2, Int(ph * 3)), u = Bezier.ease.y(ph * 3 - Double(seg))
