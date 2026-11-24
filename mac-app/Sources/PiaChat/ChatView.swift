@@ -419,7 +419,8 @@ struct TypingDots: View {
     var body: some View {
         let n = model.helpers.count
         VStack(alignment: .leading, spacing: 6) {
-            ActivityLoader(activity: model.busy ? model.activity : (n >= 3 ? .waiting : .pair), dimmed: model.busy && model.stopping, goo: model.busy && n > 0)
+            // я — тоже точка: 1 помощник + я = Jelly (2 точки), 2+ помощника + я = Jelly Triangle; пока я думаю/пишу — быстрее
+            ActivityLoader(activity: n == 0 ? model.activity : (n >= 2 ? .waiting : .pair), dimmed: model.busy && model.stopping, goo: model.busy && n > 0)
                 .help(n > 0 ? "\(model.busy ? model.activity.title + ", " : "")\(n) \(plural(n, "помощник", "помощника", "помощников")) — щелчок или ↓" : model.activity.title)
                 .onTapGesture { if n > 0 { withAnimation(.snappy(duration: 0.22)) { model.helpersExpanded.toggle() } } }
             if model.helpersExpanded && n > 0 {

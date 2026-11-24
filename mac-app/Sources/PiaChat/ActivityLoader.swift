@@ -14,8 +14,8 @@ enum Activity: String, CaseIterable {
     case helpers     // помощники                     — Newton's Cradle
     case compacting  // сжимаю разговор               — Momentum
     case other       // прочие инструменты            — Dot Wave
-    case pair        // сам свободен, работают 1–2 помощника — Jelly
-    case waiting     // сам свободен, работают 3+ помощника — Jelly Triangle
+    case pair        // сам свободен, работает 1 помощник — Jelly (я + он = 2 точки)
+    case waiting     // сам свободен, работают 2+ помощника — Jelly Triangle (я + они)
 
     var title: String {
         switch self {
@@ -278,7 +278,9 @@ enum L {
         let sp = LoaderShape.spec(a, dot: dot)
         let w = sp.s * sp.w, h = sp.s * sp.h, dy = (ActivityLoader.box.height - h) / 2
         var out: [(CGPoint, CGFloat, Double)] = []
-        draw(a, s: sp.s, t: t) { out.append((CGPoint(x: $0.x, y: $0.y + dy), $1, $2)) }
+        // помощники и я тоже занят — та же фигура, но живее (×1.6)
+        let tt = goo && (a == .pair || a == .waiting) ? t * 1.6 : t
+        draw(a, s: sp.s, t: tt) { out.append((CGPoint(x: $0.x, y: $0.y + dy), $1, $2)) }
         if goo && a != .pair && a != .waiting {
             let tr = traveler(CGSize(width: w, height: h), dot: dot, t: t)
             out.append((CGPoint(x: tr.0.x, y: tr.0.y + dy), tr.1, tr.2))
