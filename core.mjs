@@ -4,41 +4,44 @@ import fs from "node:fs";
 import { spawn } from "node:child_process";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { obj, str, num, opt, lit, union } from "@earendil-works/pi-schema";
-import { createRegistry, Harness, AssistantEntry, defineTool, defineExtension, configure, hook, CompactionTask, GenerationTask } from "@earendil-works/pi-durable";
+import { createRegistry, Harness, AssistantEntry, defineTool, defineExtension, section, configure, hook, CompactionTask, GenerationTask } from "@earendil-works/pi-durable";
 import { createToolSearchExtension } from "@earendil-works/pi-durable/tool-search";
 import { loadMcp, closeMcp } from "./mcp.mjs";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { DatabaseSync } from "node:sqlite";
 import { STREAM, RETRY, IDLE_MS, MAX_RESTARTS, activity, currentTool, judge, LIMITS } from "./guard.mjs";
-import { parseStop, APP, WORKDIR, ROLES, makeModels, Files, Web, Browser, Memory, ensureMemory } from "./shared.mjs";
+import { parseStop, APP, WORKDIR, MEMORY, ROLES, makeModels, Files, Web, Browser, Memory, ensureMemory } from "./shared.mjs";
 import { ref } from "./providers.mjs";
 import { isLimitError, limitResetAt, mainLimitLine, helperLimitLine, pauseLabel } from "./limit.mjs";
 import { buildMessage } from "./attachments.mjs";
 import { imageTrimHook, flatContent, imageTokensOf, makePathResolver } from "./image-context.mjs";
+import { toolTrimHook } from "./tool-context.mjs";
 import { Feed, publicItem } from "./feed.mjs";
 import { killConvTree, TrackedEnv } from "./proctree.mjs";
 
 let harness, Mcp, ToolSearch;   // открываются в openCore()
 
 // ── Характер ─────────────────────────────────────────────
-const CHARACTER = `Ты — единственный личный помощник пользователя во всём, одна цельная личность, мужчина (о себе в мужском роде).
-Характер: весёлый, живой, человечный, поддерживающий. Говори по-русски, строго по существу, простыми словами, без техтерминов и эмодзи. Отвечай максимально коротко: 1–2 коротких предложения, только суть. Без пояснений причин, вступлений, повторов задачи и предложений «если хочешь…», если пользователь не спросил. Списки — только когда пунктов действительно несколько, по одной строке на пункт. Главное можно выделить **жирным**, ссылки — как есть.
-Ты — ОРКЕСТРАТОР. Сам руками ничего не делаешь: у тебя нет файлов, команд, интернета, браузера и подключений (MCP) — это есть только у помощников (helper). Любую работу, даже мелкую проверку или чтение файла, поручай помощникам. Папка по умолчанию: ${WORKDIR}.
-У пользователя Mac: сочетания клавиш называй маковские — ⌘ Cmd вместо Ctrl (⌘D, ⌘C, ⌘V), ⌥ Option вместо Alt. Ctrl упоминай только там, где на Mac именно Ctrl (например Ctrl+C в терминале).
-Как работаешь: на болтовню и вопросы из головы отвечай сам. Всё остальное — через helper.
-Делай именно то, что просит пользователь. Если он ждёт результат (например, готовый ролик) — цель только этот результат: не подменяй её уборкой, записями, отчётами или вопросами. Не задавай лишних вопросов, если ответ можно найти в его файлах — поручи помощнику найти.
-Задание помощнику пиши полностью, он не видит разговор: слова пользователя ДОСЛОВНО (цитатой) и полные пути ко всем его картинкам, цель и что считается готовым результатом, папки и пути, где лежат инструкции (пусть сначала прочитает их и следует им), что нельзя трогать. Большую задачу разбей на части, независимые — одновременно.
-Каждая часть работы — новый помощник с чистого листа (продолжать старого помощника нельзя: его длинная история делает каждый шаг дорогим). Если пользователь уточняет или говорит «не работает» по задаче, которую уже делал помощник, — в задание нового включи коротко отчёт прошлого: что сделано (файлы, страницы), что не сработало. Если помощник ещё работает — уточнение передай ему через helper_message.
-Модель помощника: smart (по умолчанию) — всё, включая код, сайты и браузер; fast — простое без браузера; opus — ТОЛЬКО если пользователь прямо попросил опус (решение пользователя 2026-11-24: Opus у помощников слишком быстро съедает лимит).
-Снимки экрана для самопроверки помощникам ЗАПРЕЩЕНЫ (решение пользователя 2026-11-24, отменяет разрешение от 23.11): результат проверяет пользователь. Помощник проверяет текстом — код страницы, DOM, логи, ответ сервера. Вмешиваться в экран пользователя тоже нельзя: мышь, клавиши, набор в его окна, новые окна Терминала, фокус, буфер обмена.
-Проверяй отчёты: не говори пользователю, что сделано, если помощник этого не подтвердил; проверено «на тестовой копии» или не проверено вовсе — так и скажи, это не «готово»; сомнительное — поручи проверить другому помощнику. ОБЯЗАТЕЛЬНО: получив новую задачу, перед запуском помощников — одна короткая фраза, что делаешь (до 10 слов), и в том же ответе сразу запускай помощников, не дожидаясь ответа. У каждого helper заполняй title.
-Помощники работают В ФОНЕ: helper сразу возвращает номер помощника (#N), а его отчёт придёт позже отдельным сообщением «[Отчёт помощника #N …]». После запуска — не больше одной короткой фразы или ничего лишнего, и закончи ход — не жди. Пока они работают, ты свободен: отвечай пользователю на любые вопросы как обычно. Не выдумывай результат до отчёта; «как дела?» — helper_list. Если пользователь уточняет или меняет задачу работающего помощника — передай ему через helper_message; если просит остановиться («стоп», «отмена») — helper_stop. Когда пришёл отчёт — проверь его и сообщи пользователю итог или запусти следующий шаг.
-Перед оплатой, отправкой от имени пользователя, удалением важного — спроси, если он заранее не разрешил (проверь память).`;
+const CHARACTER = `Ты — личный помощник пользователя на его Mac. Кто ты и как говоришь — в SOUL.md ниже.
+Работаешь сам: файлы и команды, интернет, браузер Yab (пользователь в нём вошёл во все сайты), подключения (MCP — через tool_search), память. Папка по умолчанию: ${WORKDIR}.
+Клавиши называй маковские: ⌘ вместо Ctrl, ⌥ вместо Alt (Ctrl — только где на Mac именно Ctrl, например в терминале).
+Если в папке задачи есть инструкции (README, AGENTS.md) — сначала прочитай их. Существующие файлы правь инструментом edit.
+Проверяй результат на настоящем. Что видно глазами (вёрстка, кадры, вид окна) — проверь снимком сам: сайт — снимок своей вкладки Yab, программа — одного окна (screencapture -x -o -l <id>), не весь экран; 1–2 снимка нужного места, до 5–6 на задачу. Не проверил — так и скажи.
+Не вмешивайся в экран пользователя: мышь, клавиши и набор в его окна, новые окна Терминала, фокус, буфер обмена.
+Экономь контекст: большие выводы не печатай целиком — ищи нужное (grep, jq, read с offset/limit). Длинные ответы инструментов система обрезает, старые убирает — нужен снова, повтори вызов.
+Долгие команды — с timeout или в фоне (nohup … > лог &); после ошибки таймаута не повторяй то же самое.
+Помощник (helper) — только если пользователь просит в фоне или параллельно, или работа очень долгая (ролик, большая заливка); задание пиши полностью, он не видит разговор.
+Перед публикацией, оплатой, отправкой от имени пользователя, удалением важного — спроси, если он заранее не разрешил.`;
+// Душа (SOUL.md в рабочей папке, по мотивам soul.md): характер главного; он может её дописывать
+const Soul = defineExtension({ name: "soul", sections: [section("soul", () => {
+  try { return fs.readFileSync(`${WORKDIR}/SOUL.md`, "utf8").trim() + `\n(файл: ${WORKDIR}/SOUL.md)`; } catch { return ""; }
+})] });
 const HELPER = `Ты — исполнитель части задачи для главного помощника. Сделай её сам до конца.
 Если в папке задачи есть инструкции (README, AGENTS.md, файлы с описанием процесса) — сначала прочитай их и следуй им. Подключения (MCP, если они настроены) находи через tool_search, только когда они нужны.
 Если во время работы придёт сообщение пользователя — оно главнее задания: учти его сразу.
-Работа с кодом: сначала прочитай AGENTS.md/README проекта и код вокруг места правки; найди причину, а не симптом. Существующие файлы правь инструментом edit (не write, не sed/python). После правки собери и проверь на настоящем текстом (запуск, лог, код страницы, DOM). Снимки экрана и скриншоты браузера для самопроверки НЕ делай — результат смотрит пользователь. Нельзя также: двигать мышь, нажимать клавиши и набирать в окна пользователя, открывать окна Терминала, забирать фокус, трогать буфер обмена. Не удалось проверить на настоящем — прямо так и напиши. Отчёт по коду — до 10 строк: причина, что изменено (файлы), как проверено.
+Работа с кодом: сначала прочитай AGENTS.md/README проекта и код вокруг места правки; найди причину, а не симптом. Существующие файлы правь инструментом edit (не write, не sed/python). После правки собери и проверь на настоящем (запуск, лог, код страницы, DOM). Что видно глазами (вёрстка, кадры, обрезка, вид окна) — проверь снимком сам, не перекладывай на пользователя. Снимки экономно: сайт — снимок своей вкладки Yab (tool_search «yab screenshot»), программа — одного окна (screencapture -x -o -l <id окна>), не весь экран; сначала найди место текстом (DOM, код) и прокрути к нему, потом 1–2 снимка; не снимай каждый шаг прокрутки; не больше 5–6 снимков на задачу. Нельзя: двигать мышь, нажимать клавиши и набирать в окна пользователя, открывать окна Терминала, забирать фокус, трогать буфер обмена. Не удалось проверить на настоящем — прямо так и напиши.
+Если в задании есть «Готово, когда» — отчёт начинай с них: по строке на пункт, ✅ + как проверено (команда/что показала), ❔ не проверено (почему), ❌ не сделано. ✅ ставь, только если сам проверил и видел результат; «должно работать» — это ❔. Отчёт по коду — до 10 строк: причина, что изменено (файлы), как проверено.
 Остальные отчёты — сжато, до 5 строк: только ответ на задачу (факты, цифры), 1–2 источника короткими ссылками, что не вышло. Без вступлений и пересказа процесса.
 Сверяй источники, после действий на сайте проверяй результат. Не плати, не отправляй и не удаляй ничего. По-русски.
 Node-скрипты запускай командой \`node\` (она есть в PATH службы) или process.execPath, а не \`pia\`: \`pia\` — это чат.\nЗависания: у каждой команды есть таймаут (bash по умолчанию 120 с, браузер ${LIMITS.browser.def} с). Скрипты Node/Playwright/CDP обязательно завершай (browser.close() или process.exit() и в catch тоже) и запускай с \`timeout N\`. Долгое (ffmpeg, заливка, опрос) — запускай с явным timeout побольше или в фоне (nohup … > лог &) и проверяй короткими командами; опрос — с лимитом времени. Если пришла ошибка про таймаут или сообщение сторожа — не повторяй то же самое, выбери другой путь.`;
@@ -53,7 +56,8 @@ const Helpers = defineExtension({ name: "helpers", tools: [
   defineTool({
     name: "helper",
     description: "Запустить помощника в фоне. Сразу возвращает его номер (#N); отчёт придёт позже отдельным сообщением. Несколько вызовов идут одновременно. Опиши задачу полностью: помощник не видит разговор (если это доработка — добавь короткий отчёт прошлого помощника). model: smart (по умолчанию; код, браузер, сайты, всё обычное), fast (дёшево, только простое без браузера) или opus (самая мощная и дорогая — только если пользователь прямо попросил опус).",
-    parameters: obj({ title: opt(str({ description: "3–8 слов для пользователя: чем занят помощник (например: «разбираю референс»)" })), task: str(), model: opt(union([lit("fast"), lit("smart"), lit("opus")])) }),
+    parameters: obj({ title: opt(str({ description: "3–8 слов для пользователя: чем занят помощник (например: «разбираю референс»)" })), task: str(),
+      done: opt(str({ description: "Критерии готовности — только если помощник что-то меняет (код, сайт, файлы); для справок не заполняй. 1–5 пунктов списком, каждый проверяем текстом" })), model: opt(union([lit("fast"), lit("smart"), lit("opus")])) }),
     replay: "safe",
     execute: async (args, api, ctx) => {
       try {
@@ -61,7 +65,8 @@ const Helpers = defineExtension({ name: "helpers", tools: [
         const legacy = await api.commit(async (tx) => (await tx.scanConversations({ ownerTaskId: api.taskId }, 1)).items[0], ctx);
         if (legacy !== undefined) return await runHelper(args, api, ctx);
         if (Date.now() < mainLimitUntil) return ok(`Лимит модели сейчас исчерпан — помощника не запускаю. ${mainLimitLine(mainLimitUntil)}`);
-        const rec = await startHelper(String(api.taskId), args, ctx);
+        const rec = await startHelper(String(api.taskId), { ...args, task: withQuote("Задание от главного помощника (его разъяснение):", args.task)
+          + (String(args.done ?? "").trim() ? `\n\nГотово, когда:\n${String(args.done).trim()}\nВ отчёте — по каждому пункту: ✅ как проверено / ❔ не проверено / ❌ не сделано.` : "") }, ctx);
         return ok(`Помощник #${rec.n} «${rec.title}» запущен в фоне. Отчёт придёт отдельным сообщением.`);
       } catch (e) { logErr("helper", e); throw e; }
     },
@@ -82,7 +87,7 @@ const Helpers = defineExtension({ name: "helpers", tools: [
       const r = [...runningHelpers.values()].find((x) => x.n === args.n);
       if (!r) return ok(`Помощник #${args.n} уже не работает.`);
       const conv = await harness.conversation(r.conv, context);
-      try { await conv.submit({ type: "input", whenBusy: "steer", whenIdle: "reject", content: `Сообщение от пользователя (важнее задания; если меняет задачу или просит остановиться — слушайся): ${args.text}` }, context); }
+      try { await conv.submit({ type: "input", whenBusy: "steer", whenIdle: "reject", content: `Новое сообщение по твоей задаче (важнее задания; если меняет задачу или просит остановиться — слушайся).\n${withQuote("Пояснение главного помощника:", args.text)}` }, context); }
       catch (e) { return ok(`Не удалось передать: ${e?.message ?? e}`); }
       return ok(`Передал помощнику #${r.n}.`);
     },
@@ -156,6 +161,12 @@ const store = (() => { try { return JSON.parse(fs.readFileSync(HELPERS_FILE, "ut
 const RUNTIME_KEYS = new Set(["progress", "wakeNote", "restarts", "giveUp", "wake"]);   // служебное сторожа — в файл не пишем
 const saveStore = () => fs.writeFileSync(HELPERS_FILE, JSON.stringify(store, (k, v) => (RUNTIME_KEYS.has(k) ? undefined : v), 2));
 const runningHelpers = new Map();   // ключ → запись работающего помощника
+// Точные слова пользователя: его последнее сообщение в текущем ходе главного (null — ход запущен отчётом помощника).
+// Код сам кладёт их цитатой в задание помощника и в helper_message — главный добавляет только своё разъяснение (решение пользователя 2026-11-24).
+let userQuote = null;
+const withQuote = (head, body) => userQuote
+  ? `Слова пользователя дословно:\n«${userQuote.text}»${userQuote.files.length ? `\nЕго картинки: ${userQuote.files.join(", ")}` : ""}\n\n${head}\n${body}`
+  : body;
 let pendingNotes = [];              // системные заметки для главного (напр. «пользователь всё остановил»)
 let pendingReports = [];            // отчёты, которые ещё не отданы главному
 let onReport = () => {};
@@ -164,7 +175,7 @@ let closing = false;
 // smart — по умолчанию (в т.ч. код); fast — простое без браузера; opus — только по прямой просьбе пользователя
 const helperRole = (m) => (m === "opus" ? ROLES.opus : m === "fast" ? ROLES.fast : ROLES.smart);
 const helperModelName = (m) => (m === "opus" || m === "fast" ? m : "smart");
-const helperExtensions = () => [Files, Web, Browser, Memory, Mcp, ToolSearch, CheapCompaction, CacheFix, ImageTrim];
+const helperExtensions = () => [Files, Web, Browser, Memory, Mcp, ToolSearch, CheapCompaction, CacheFix, ImageTrim, ToolTrim];
 async function startHelper(key, args, ctx) {
   let rec = store.items[key];
   if (!rec) {
@@ -341,7 +352,7 @@ const CheapCompaction = defineExtension({ name: "cheap-compaction", hooks: [hook
       const who = m.role === "user" ? "Пользователь" : m.role === "assistant" ? "Помощник" : m.role === "toolResult" ? "  (результат)" : m.role;
       const t = flat(m.content); return `${who}: ${m.role === "toolResult" ? t.slice(0, 1500) : t}`;
     }).join("\n");
-    const model = models.getModel(ROLES.compact.provider, ROLES.compact.modelId);
+    const model = models.getModel(ROLES.smart.provider, ROLES.smart.modelId);   // Sonnet: Haiku терял детали
     if (!model) return undefined;   // нет такой модели — сожмёт основная модель
     const res = await models.completeSimple(model, {
       systemPrompt: "Ты сжимаешь историю разговора личного помощника с пользователем, чтобы помощник продолжил без потерь сути.",
@@ -355,7 +366,7 @@ const CheapCompaction = defineExtension({ name: "cheap-compaction", hooks: [hook
     }, { maxTokens: 8000 });
     if (res.stopReason === "error") return undefined; // не вышло — сожмёт основная модель
     const summary = flat(res.content).trim();
-    fs.appendFileSync(`${APP}/compaction.log`, `${new Date().toISOString()} сжато ${ROLES.compact.modelId}: вход ${(res.usage?.input ?? 0) + (res.usage?.cacheRead ?? 0) + (res.usage?.cacheWrite ?? 0)} ток., пересказ ${res.usage?.output} ток., $${(res.usage?.cost?.total ?? 0).toFixed(4)}\n`);
+    fs.appendFileSync(`${APP}/compaction.log`, `${new Date().toISOString()} сжато ${ROLES.smart.modelId}: вход ${(res.usage?.input ?? 0) + (res.usage?.cacheRead ?? 0) + (res.usage?.cacheWrite ?? 0)} ток., пересказ ${res.usage?.output} ток., $${(res.usage?.cost?.total ?? 0).toFixed(4)}\n`);
     return summary ? { summary } : undefined;
   },
 })] });
@@ -371,6 +382,11 @@ const ImageTrim = defineExtension({ name: "image-trim", hooks: [hook(GenerationT
   resolve: resolvePath, cwd: WORKDIR, modelId: ROLES.main.modelId,
   log: (line) => fs.appendFileSync(`${APP}/compaction.log`, `${new Date().toISOString()} ${line}\n`),
   onError: (e) => logErr("image-trim", e),
+}))] });
+// Ответы инструментов: большие — обрезаются (полностью в файл), старые — пометкой (tool-context.mjs)
+const ToolTrim = defineExtension({ name: "tool-trim", hooks: [hook(GenerationTask, toolTrimHook({
+  log: (line) => fs.appendFileSync(`${APP}/compaction.log`, `${new Date().toISOString()} ${line}\n`),
+  onError: (e) => logErr("tool-trim", e),
 }))] });
 
 // ── Кэш: метка перед сменой инструментов ────────────────
@@ -415,9 +431,110 @@ const DebugPayload = defineExtension({ name: "debug-payload", hooks: [hook(Gener
 
 // ── Ядро ────────────────────────────────────────────────
 // Сжатие: окно у моделей 1 млн, но держим разговор небольшим — дешевле и модель внимательнее.
-// В фоне начинаем сжимать с ~60 тыс. токенов, жёсткий предел ~80 тыс., дословно остаются последние ~20 тыс.
-// Окно 1 млн: ждать сжатия на 200 тыс., фоновое сжатие с 150 тыс., последние 60 тыс. — дословно
+// Помощники (окно 1 млн): фоновое сжатие с 150 тыс., жёсткий предел 200 тыс., последние 60 тыс. — дословно
 const COMPACTION = { enabled: true, reserveTokens: 800_000, backgroundTokens: 50_000, keepRecentTokens: 60_000 };
+// Главный работает сам; контекст держат мелким обрезка и уборка ответов инструментов (tool-context.mjs), сжатие — запасное:
+// фоновое с ~120 тыс., жёсткий предел ~160 тыс., дословно остаются последние ~40 тыс. (окно 1 млн)
+const MAIN_COMPACTION = { enabled: true, reserveTokens: 840_000, backgroundTokens: 40_000, keepRecentTokens: 40_000 };
+
+// ── Новый разговор после перерыва ──
+// Кэш подсказок живёт минуты: после перерыва первое сообщение заново оплачивает весь контекст главного
+// (утром ~127 тыс. токенов Opus ≈ 3% пятичасового лимита). Поэтому после долгой тишины главный начинает новый разговор.
+// Долгая память (заметки) общая; разбор памяти дочитывает и старый разговор (chats.json: previous);
+// к первому сообщению нового прикладываются обо-мне.md и короткий пересказ прошлого (модель роли compact).
+// PIA_IDLE_RESET_MIN — минуты тишины (по умолчанию 10: кэш всё равно уже протух; 0 — выключить).
+// Прошлые разговоры не удаляются: главный ищет в них подробности инструментами past_search / past_read (ответ ограничен по размеру).
+const IDLE_RESET_MS = Number(process.env.PIA_IDLE_RESET_MIN ?? 10) * 60_000;
+const PAST_MAX = 4000;   // символов в ответе past_search / past_read — чтобы не раздувать контекст
+function pastConvs() {
+  try { return (JSON.parse(fs.readFileSync(`${APP}/chats.json`, "utf8")).previous ?? []).map(Number).filter(Number.isFinite); } catch { return []; }
+}
+let pastDb;
+function pastRows(sql, ...args) {
+  if (!pastDb) {
+    pastDb = new DatabaseSync(`${APP}/memory.sqlite`, { readOnly: true });
+    pastDb.function("low", { deterministic: true }, (t) => String(t ?? "").toLowerCase().replace(/ё/g, "е"));   // lower() в SQLite не знает кириллицу
+  }
+  return pastDb.prepare(sql).all(...args);
+}
+const pastDate = (ts) => ts ? new Date(ts).toLocaleString("ru-RU", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : "";
+function pastLine(r, max = 400) {
+  const e = JSON.parse(r.record), m = e.model?.[0];
+  const who = e.kind === "pi.user" ? "Пользователь" : e.kind === "pi.assistant" ? "Главный" : e.kind === "pi.tool-result" ? "  (результат)" : null;
+  if (!who) return null;
+  const t = flat(m?.content).replace(/\s+/g, " ").trim();
+  return t ? `#${r.id} ${pastDate(m?.timestamp)} ${who}: ${t.slice(0, max)}${t.length > max ? "…" : ""}` : null;
+}
+const Past = defineExtension({ name: "past", tools: [
+  defineTool({
+    name: "past_search",
+    description: "Поиск по прошлым разговорам с пользователем (после перерыва разговор начинается заново). Для подробностей недавних задач: пути, ссылки, отчёты помощников, что пробовали. Слова через пробел; находки — свежие сначала, с номером #id для past_read.",
+    parameters: obj({ query: str() }), replay: "safe",
+    execute: async ({ query }) => {
+      const convs = pastConvs();
+      const words = String(query).toLowerCase().replace(/ё/g, "е").split(/[\s,]+/).filter((w) => w.length > 1).map((w) => w.length > 5 ? w.slice(0, -2) : w).slice(0, 8);
+      if (!convs.length || !words.length) return ok("Прошлых разговоров нет или пустой запрос.");
+      const where = words.map(() => "instr(low(record), ?) > 0").join(" or ");
+      const rows = pastRows(`select id, record from entries where conversation_id in (${convs.map(() => "?").join(",")})
+        and json_extract(record,'$.kind') in ('pi.user','pi.assistant','pi.tool-result') and (${where}) order by id desc limit 300`, ...convs, ...words);
+      const scored = rows.map((r) => { const low = r.record.toLowerCase().replace(/ё/g, "е"); return { r, s: words.filter((w) => low.includes(w)).length }; })
+        .sort((a, b) => b.s - a.s || b.r.id - a.r.id);
+      const out = []; let size = 0;
+      for (const { r } of scored) { const l = pastLine(r, 300); if (!l) continue; if (size + l.length > PAST_MAX) break; out.push(l); size += l.length; }
+      return ok(out.length ? out.join("\n") : "Ничего не нашлось.");
+    },
+  }),
+  defineTool({
+    name: "past_read",
+    description: "Прочитать кусок прошлого разговора вокруг записи #id из past_search (несколько сообщений до и после).",
+    parameters: obj({ id: num() }), replay: "safe",
+    execute: async ({ id }) => {
+      const convs = pastConvs();
+      const conv = pastRows("select conversation_id c from entries where id = ?", Number(id))[0]?.c;
+      if (conv == null || !convs.includes(Number(conv))) return ok("Запись не найдена в прошлых разговорах.");
+      const kinds = "json_extract(record,'$.kind') in ('pi.user','pi.assistant','pi.tool-result')";
+      const before = pastRows(`select id, record from entries where conversation_id = ? and id < ? and ${kinds} order by id desc limit 5`, conv, Number(id)).reverse();
+      const after = pastRows(`select id, record from entries where conversation_id = ? and id >= ? and ${kinds} order by id limit 7`, conv, Number(id));
+      const out = []; let size = 0;
+      for (const r of [...before, ...after]) { const l = pastLine(r, r.id === Number(id) ? 1500 : 500); if (!l) continue; if (size + l.length > PAST_MAX) break; out.push(l); size += l.length; }
+      return ok(out.join("\n") || "Пусто.");
+    },
+  }),
+] });
+async function handoffSummary(conv) {
+  const lines = []; let size = 0, cursor, prior = "";
+  outer: do {
+    const page = await conv.entries({ order: "descending" }, 200, cursor, context);
+    for (const e of page.items) {
+      const m = e.model?.[0];
+      if (e.kind === "pi.compaction") { prior = flat(m?.content); break outer; }
+      const line = e.kind === "pi.user" ? `Пользователь: ${flat(m?.content)}`
+        : e.kind === "pi.assistant" ? `Помощник: ${flat(m?.content)}`
+        : e.kind === "pi.tool-result" ? `  (результат: ${flat(m?.content).slice(0, 300)})` : "";
+      if (!line.trim()) continue;
+      lines.push(line.slice(0, 3000)); size += Math.min(line.length, 3000);
+      if (size > 60_000) break outer;
+    }
+    cursor = page.next;
+  } while (cursor);
+  if (!lines.length && !prior) return "";
+  const model = models.getModel(ROLES.compact.provider, ROLES.compact.modelId);
+  if (!model) return "";
+  const res = await models.completeSimple(model, {
+    systemPrompt: "Ты готовишь короткую передачу дел: личный помощник начинает новый разговор с пользователем и должен знать, на чём остановились.",
+    messages: [{ role: "user", timestamp: Date.now(), content: `Сделай выжимку прошлого разговора до 250 слов, по-русски, без воды. Главное — текущая задача, чтобы её можно было продолжить:
+- над чем работали последним (просьбы пользователя — коротко цитатой);
+- что не доделано или обещано;
+- договорённости и решения пользователя из этого разговора;
+- нужные факты: пути, ссылки, названия.
+Старое и законченное опусти.
+
+${prior ? `Ранний пересказ:\n${prior.slice(0, 15_000)}\n\n` : ""}Последние сообщения:\n${lines.reverse().join("\n")}` }],
+  }, { maxTokens: 1500 });
+  if (res.stopReason === "error") throw new Error(res.errorMessage ?? "пересказ не удался");
+  fs.appendFileSync(`${APP}/compaction.log`, `${new Date().toISOString()} новый разговор после перерыва: пересказ ${ROLES.compact.modelId}, вход ${(res.usage?.input ?? 0) + (res.usage?.cacheRead ?? 0)} ток., $${(res.usage?.cost?.total ?? 0).toFixed(4)}\n`);
+  return flat(res.content).trim();
+}
 const LABELS = { web_search: "ищу в интернете", fetch_page: "читаю страницу", browser: "работаю в браузере", helper: "запускаю помощника", helper_list: "смотрю, кто работает", helper_message: "передаю помощнику", helper_stop: "останавливаю помощника",
   memory_search: "вспоминаю", tool_search: "ищу нужное умение", memory_read: "вспоминаю", remember: "запоминаю", bash: "работаю на компьютере", read: "читаю файл", write: "пишу файл", edit: "правлю файл" };
 const txt = (m) => (m?.content ?? []).filter((c) => c.type === "text").map((c) => c.text).join("");
@@ -437,17 +554,17 @@ export async function openCore() {
   ({ ext: Mcp } = await loadMcp());
   ToolSearch = createToolSearchExtension();
   const registry = createRegistry();
-  for (const ext of [Files, Web, Browser, Memory, Mcp, ToolSearch, Helpers, CheapCompaction, CacheFix, ImageTrim, DebugPayload]) registry.install(ext);
+  for (const ext of [Soul, Files, Web, Browser, Memory, Mcp, ToolSearch, Helpers, Past, CheapCompaction, CacheFix, ImageTrim, ToolTrim, DebugPayload]) registry.install(ext);
   // Команды помощников идут через TrackedEnv: учёт процессов и метки PIA_CONV/PIA_HELPER в окружении (см. proctree.mjs)
   const env = ({ cwd, conversationId }) => new TrackedEnv({ cwd: cwd ?? WORKDIR }, conversationId);
   harness = await Harness.open(await openNodeSqliteStorage(`${APP}/memory.sqlite`), {
     models, registry, env, settings: { toolExecution: "parallel", stream: STREAM, retry: RETRY },
   }, context);
 
-  // Оркестратор: только память и помощники. Файлы, команды, интернет, браузер и MCP — только у помощников.
+  // Главный: все инструменты сам; помощники — только для фоновой/параллельной работы.
   // Модель — роль main из models.json (по умолчанию Opus 5.5, medium); PIA_MAIN_MODEL=haiku|fast — дёшево, для проверочного экземпляра
-  const agent = { compaction: COMPACTION, model: ref(ROLES.main), thinkingLevel: ROLES.main.thinking, cwd: WORKDIR, instructions: CHARACTER,
-    extensions: [Memory, Helpers, CheapCompaction, CacheFix, ImageTrim, DebugPayload] };
+  const agent = { compaction: MAIN_COMPACTION, model: ref(ROLES.main), thinkingLevel: ROLES.main.thinking, cwd: WORKDIR, instructions: CHARACTER,
+    extensions: [Soul, Files, Web, Browser, Memory, Mcp, ToolSearch, Helpers, Past, CheapCompaction, CacheFix, ImageTrim, ToolTrim, DebugPayload] };
   const mapFile = `${APP}/chats.json`;
   const map = fs.existsSync(mapFile) ? JSON.parse(fs.readFileSync(mapFile, "utf8")) : {};
   let chat = map.main != null ? await harness.conversation(map.main, context) : undefined;
@@ -455,6 +572,14 @@ export async function openCore() {
     chat = await harness.createConversation({ ownership: { kind: "ownerless" }, agent }, context);
     map.main = chat.id; fs.writeFileSync(mapFile, JSON.stringify(map, null, 2));
   } else await chat.configure({ ...agent, modelTools: null }, context);   // сбросить ранее загруженные инструменты MCP
+  // Когда главный в последний раз что-то делал — по последней записи разговора
+  let lastActive = Date.now();
+  let cleanSlate = false;   // разговор ещё пустой (только что начат) — сбрасывать нечего
+  try {
+    const last = (await chat.entries({ order: "descending" }, 1, undefined, context)).items[0];
+    lastActive = last?.model?.at(-1)?.timestamp ?? lastActive;
+    cleanSlate = !last;
+  } catch (e) { logErr("last-active", e); }
 
   // ── Лента: при первом запуске — из всей истории, потом догоняем то, что записалось без нас ──
   const feed = new Feed(`${APP}/feed.jsonl`, { imageDir: `${APP}/вложения/история` });
@@ -483,8 +608,7 @@ export async function openCore() {
   const notice = (text) => feed.emit({ type: "notice", text });
 
   // Один постоянный watch: новые записи разговора → лента; pi.live → частичный ответ и строка активности
-  const watch = await chat.watch(context);
-  watch.start(async (call) => {
+  const onWatch = async (call) => {
     if (call.kind !== "value") return;
     const v = call.value;
     try {
@@ -501,8 +625,46 @@ export async function openCore() {
       }
       emitLive();
     } catch (e) { logErr("watch", e); }
-  });
+  };
+  let watch = await chat.watch(context);
+  watch.start(onWatch);
   harness.resume();
+
+  // Новый разговор после перерыва (см. IDLE_RESET_MS): только когда главный свободен и помощники не работают
+  let resetting = null;
+  // Сброс один раз за перерыв: после него ждём, пока что-то произойдёт (ход главного), и только потом снова считаем тишину
+  const idleLong = () => IDLE_RESET_MS > 0 && !cleanSlate && Date.now() - lastActive > IDLE_RESET_MS;
+  const canReset = () => !busy && !compacting && !flushing && !runningHelpers.size && !pendingReports.length && !activeHelpers.size;
+  function freshStart() {
+    resetting ??= (async () => {
+      const old = chat;
+      try {
+        let recap = "";
+        try { recap = await handoffSummary(old); } catch (e) { logErr("fresh-start-recap", e); }
+        let about = "";
+        try { about = fs.readFileSync(`${MEMORY}/обо-мне.md`, "utf8").trim().slice(0, 4000); } catch {}
+        if (!canReset()) return;   // пока пересказывали, пользователь написал или пришёл отчёт
+        const fresh = await harness.createConversation({ ownership: { kind: "ownerless" }, agent }, context);
+        await catchUp();
+        await watch.stop().catch(() => {});
+        chat = fresh;
+        watch = await chat.watch(context);
+        watch.start(onWatch);
+        const map = fs.existsSync(mapFile) ? JSON.parse(fs.readFileSync(mapFile, "utf8")) : {};
+        map.previous = [...(map.previous ?? []), old.id].slice(-1000);
+        map.main = fresh.id;
+        fs.writeFileSync(mapFile, JSON.stringify(map, null, 2));
+        pendingNotes.unshift(`[Система] Это новый разговор: после перерыва прошлый контекст сброшен для экономии лимита. Долгая память на месте (memory_search, memory_read); подробности прошлых разговоров — past_search, past_read.`
+          + (about ? `\n\nСводка о пользователе (обо-мне.md):\n${about}` : "")
+          + (recap ? `\n\nНа чём остановились в прошлом разговоре:\n${recap}` : ""));
+        cleanSlate = true;
+        kickMemoryWorker();   // разобрать в память хвост прошлого разговора
+      } catch (e) { logErr("fresh-start", e); }
+      finally { resetting = null; lastActive = Date.now(); }
+    })();
+    return resetting;
+  }
+  const idleTimer = setInterval(() => { if (idleLong() && canReset()) freshStart(); }, 60_000);
 
   async function stop() {
     if (!busy) return;
@@ -524,6 +686,8 @@ export async function openCore() {
   }
   // Один ход главного (как раньше ask() в терминале): основной вопрос + дописки по ходу
   async function runTurn(content) {
+    if (resetting) await resetting;
+    lastActive = Date.now(); cleanSlate = false;
     busy = true; stopping = false; extra = []; startedAt = Date.now(); label = "думаю"; toolRunning = false;
     emitLive(true);
     const answered = new Set();
@@ -555,7 +719,7 @@ export async function openCore() {
     }
     finally {
       await catchUp();   // watch мог отстать — дочитать записи до конца хода, чтобы ответ не потерял ключ потока
-      busy = false; stopping = false; queue = []; extra = []; toolRunning = false;
+      busy = false; stopping = false; queue = []; extra = []; toolRunning = false; lastActive = Date.now();
       feed.endTurn(); emitLive(true);
     }
   }
@@ -588,6 +752,7 @@ export async function openCore() {
     try {
       const items = pendingReports; pendingReports = [];
       feed.addReports(items);
+      userQuote = null;   // ход по отчёту — свежих слов пользователя нет
       await runTurn(items.map((r) => r.text).join("\n\n"));
       for (const r of items) delete store.items[r.key];
       saveStore();
@@ -634,6 +799,9 @@ export async function openCore() {
       do label = `[картинка ${k++}]`; while (t.includes(label) || tok.has(label));
       tok.set(label, file); t += (t.trim() ? " " : "") + label;
     }
+    // Долго молчали (Mac спал и таймер не успел) — сначала новый разговор, чтобы заметка о прошлом ушла с этим сообщением
+    if (!busy && !resetting && idleLong() && canReset()) freshStart();
+    if (resetting) await resetting;
     const m = await buildMessage(t, tok);
     if (pendingNotes.length) {   // системная заметка об остановке — главный увидит её с этим сообщением
       const head = pendingNotes.splice(0).join("\n");
@@ -643,6 +811,7 @@ export async function openCore() {
     for (const [token, full] of pastes) card = card.split(full).join(token);   // большие вставки в терминале — свёрнутыми
     const key = typeof m.content === "string" ? m.content : txt({ content: m.content });
     const item = feed.addUser({ text: m.card, card, notes: m.notes, images: m.files, key, source });
+    if (own) userQuote = { text: own.slice(0, 4000), files: m.files ?? [] };
     if (busy) steer(m.content);
     else runTurn(m.content).then(() => flushReports()).catch((e) => logErr("turn", e));
     return item;
@@ -709,7 +878,7 @@ export async function openCore() {
     onStreamClosed: (kind) => { if (kind === "terminal") kickMemoryWorker(); },
     async close() {
       closing = true;
-      clearInterval(helpersTimer); clearInterval(watchdogTimer);
+      clearInterval(helpersTimer); clearInterval(watchdogTimer); clearInterval(idleTimer);
       await watch.stop().catch(() => {});
       await harness.close(context);
       await closeMcp();

@@ -140,7 +140,7 @@ export const Browser = defineExtension({ name: "browser", tools: [
 export const MEMORY_DIRS = ["люди", "организации", "предпочтения", "факты", "решения", "дела/активные", "дела/завершённые", "дневник"];
 export function ensureMemory() {
   for (const d of MEMORY_DIRS) fs.mkdirSync(`${MEMORY}/${d}`, { recursive: true });
-  for (const [f, body] of [["обо-мне.md", "---\nid: обо-мне\ntype: профиль\n---\n"], ["вопросы.md", ""], ["входящие.md", ""]])
+  for (const [f, body] of [["обо-мне.md", "---\nid: обо-мне\ntype: профиль\n---\n"], ["входящие.md", ""]])
     if (!fs.existsSync(`${MEMORY}/${f}`)) fs.writeFileSync(`${MEMORY}/${f}`, body);
   if (!fs.existsSync(`${MEMORY}/.git`)) {
     try { execFileSyncQuiet("git", ["init", "-q"], MEMORY); execFileSyncQuiet("git", ["add", "-A"], MEMORY); execFileSyncQuiet("git", ["-c", "user.name=pi-agent", "-c", "user.email=pi@local", "commit", "-qm", "начало"], MEMORY); } catch {}
@@ -163,12 +163,11 @@ const norm = (s) => s.toLowerCase().replace(/ё/g, "е");
 export const Memory = defineExtension({
   name: "memory",
   sections: [
-    // Только короткое оглавление и открытые вопросы — сама память подгружается по запросу.
+    // Только короткое оглавление — сама память подгружается по запросу.
     section("memory", () => {
-      const files = walk(MEMORY).filter((f) => !/^(дневник|входящие|вопросы)/.test(f)).map((f) => f.replace(/\.md$/, ""));
-      const q = fs.readFileSync(`${MEMORY}/вопросы.md`, "utf8").trim().slice(0, 600);
+      const files = walk(MEMORY).filter((f) => !/^(дневник|входящие)/.test(f)).map((f) => f.replace(/\.md$/, ""));
       return `Долгая память — заметки. Ищи в ней (memory_search), когда речь о людях, прошлом, планах, предпочтениях; не выдумывай. Новое важное сохраняй через remember.
-Есть заметки: ${files.join(", ").slice(0, 900) || "пока пусто"}.` + (q ? `\nОткрытые вопросы к пользователю (задай к месту, по одному, не навязчиво):\n${q}` : "");
+Есть заметки: ${files.join(", ").slice(0, 900) || "пока пусто"}.`;
     }),
   ],
   tools: [
