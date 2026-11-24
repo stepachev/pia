@@ -10,6 +10,12 @@ struct ChatView: View {
     @State private var scroll = ScrollState()
     private var atBottom: Bool { get { scroll.atBottom } nonmutating set { scroll.atBottom = newValue } }
     private var metrics: ScrollMetrics { get { scroll.metrics } nonmutating set { scroll.metrics = newValue } }
+
+    /// «держать ленту»: если пришёл новый ответ — его начало у верхнего края (если ответ короче окна,
+    /// прокрутка упирается в низ — то же, что прилипание к низу), иначе — низ
+    private func follow(_ proxy: ScrollViewProxy) {
+        if let a = scroll.anchorSeq { proxy.scrollTo(a, anchor: .top) } else { proxy.scrollTo("bottom", anchor: .bottom) }
+    }
     @State private var wheelMonitor: Any?
     /// до этого момента лента держится низа, пока меняется высота поля ввода
     @State private var holdBottomUntil = Date.distantPast
@@ -103,7 +109,7 @@ struct ChatView: View {
                 let grew = abs(new.content - old.content) >= 0.5 || abs(new.container - old.container) >= 0.5
                 if grew {
                     // рост ленты (дописывается ответ), смена окна — это НЕ прокрутка пользователя: прилипание не трогаем
-                    if atBottom { proxy.scrollTo("bottom", anchor: .bottom) }
+                    if atBottom { follow(proxy) }
                 } else if !atBottom, Date() >= holdBottomUntil {
                     // пользователь сам докрутил до низа
                     var st = StickyBottom(on: false)
@@ -118,6 +124,8 @@ struct ChatView: View {
                     var v: NSView? = cv.hitTest(cv.convert(ev.locationInWindow, from: nil))
                     while let x = v { if x is NSTextView { return ev }; v = x.superview }
                     let dy = ev.scrollingDeltaY
+                    // пользователь сам листает длинный ответ — якорь снят, лента стоит, пока он не докрутит до низа
+                    if scroll.anchorSeq != nil && dy != 0 { scroll.anchorSeq = nil; atBottom = false }
                     if dy > 0 { atBottom = false }
                     else if dy < 0 || ev.momentumPhase != [] {
                         // дистанцию читаем после применения прокрутки
@@ -133,9 +141,13 @@ struct ChatView: View {
             .onDisappear { if let m = wheelMonitor { NSEvent.removeMonitor(m); wheelMonitor = nil } }
             .onChange(of: model.scrollToBottomToken) {
                 atBottom = true
+                // показ окна при свежем ответе (после него твоих сообщений нет) — начало ответа остаётся сверху;
+                // отправка сообщения и загрузка истории — вниз
+                let lastSeen = model.items.last(where: { $0.role != "report" })
+                if let a = scroll.anchorSeq, lastSeen?.seq == a, lastSeen?.role == "assistant" {} else { scroll.anchorSeq = nil }
                 // ленивый список досчитывает высоты не сразу — прокручиваем несколько раз
                 for d in [0.0, 0.08, 0.25, 0.6] {
-                    DispatchQueue.main.asyncAfter(deadline: .now() + d) { proxy.scrollTo("bottom", anchor: .bottom) }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + d) { follow(proxy) }
                 }
             }
             .onChange(of: inputHeight) {
@@ -143,15 +155,23 @@ struct ChatView: View {
                 guard atBottom else { return }
                 holdBottomUntil = Date().addingTimeInterval(0.6)
                 for d in [0.0, 0.05, 0.15, 0.3, 0.5] {
-                    DispatchQueue.main.asyncAfter(deadline: .now() + d) { proxy.scrollTo("bottom", anchor: .bottom) }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + d) { follow(proxy) }
                 }
             }
             .onChange(of: signature) {
                 guard atBottom else { return }
-                proxy.scrollTo("bottom", anchor: .bottom)
+                follow(proxy)
                 // markdown дорисовывается после первого прохода вёрстки — повторяем, пока высота не устоится
                 for d in [0.05, 0.15, 0.4] {
-                    DispatchQueue.main.asyncAfter(deadline: .now() + d) { if atBottom { proxy.scrollTo("bottom", anchor: .bottom) } }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + d) { if atBottom { follow(proxy) } }
+                }
+            }
+            .onChange(of: model.newAnswerSeq) {
+                Log.write("новый ответ seq=\(model.newAnswerSeq), у низа: \(atBottom)")
+                guard atBottom else { return }
+                scroll.anchorSeq = model.newAnswerSeq
+                for d in [0.0, 0.08, 0.25, 0.6] {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + d) { if atBottom { follow(proxy) } }
                 }
             }
             .onChange(of: model.anchorAfterPrepend) {
@@ -218,6 +238,8 @@ struct ChatView: View {
 
 final class ScrollState {
     var atBottom = true
+    /// новый ответ, чей верх держим у верхнего края (длинный ответ не уезжает вниз; короткий — как раньше, у низа)
+    var anchorSeq: Int?
     var metrics = ScrollMetrics(offset: 0, content: 0, container: 0)
 }
 

@@ -32,6 +32,7 @@ final class ChatModel {
     var loadingOlder = false
     var noOlder = false
     var scrollToBottomToken = 0          // изменилось — лента прокручивается вниз
+    var newAnswerSeq = 0                 // пришёл новый ответ (не из истории) — лента держит его начало у верха
     var anchorAfterPrepend: Int?         // после подгрузки старых — держать этот seq наверху
 
     @ObservationIgnored let client = PiaClient()
@@ -148,6 +149,7 @@ final class ChatModel {
         var list = items
         var changed = false
         var appended = false
+        var newAssistant = 0
         let incomingPartial = Set(h.items.filter(\.isPartial).map(\.seq))
         // недописанный ответ, который пропал из ответа службы (остановлен) — убрать
         let before = list.count
@@ -165,8 +167,10 @@ final class ChatModel {
                 list.insert(it, at: pos)
                 changed = true
                 appended = true
+                if it.role == "assistant" { newAssistant = max(newAssistant, it.seq) }
             }
         }
+        if animated && newAssistant > 0 { newAnswerSeq = newAssistant }
         if let last = h.last { lastSeq = max(lastSeq, last) }
         else if let m = h.items.filter({ !$0.isPartial }).map(\.seq).max() { lastSeq = max(lastSeq, m) }
         if changed {

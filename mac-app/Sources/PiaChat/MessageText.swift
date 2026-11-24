@@ -35,6 +35,18 @@ enum MDAttr {
     /// Строчная Markdown-разметка → NSAttributedString: жирный, курсив, `код`, ~~зачёркнутый~~, ссылки (.link)
     static func make(_ s: String, size: CGFloat, weight: NSFont.Weight = .regular, color: NSColor,
                      lineSpacing: CGFloat = 0) -> NSAttributedString {
+        // готовый текст запоминаем: лента пересчитывает все сообщения при каждом показе окна,
+        // а разбор разметки + типограф на каждый абзац заметно тормозят
+        let key = "\(size)|\(weight.rawValue)|\(lineSpacing)|\(color.hash)|\(s)" as NSString
+        if let hit = cache.object(forKey: key) { return hit }
+        let res = build(s, size: size, weight: weight, color: color, lineSpacing: lineSpacing)
+        cache.setObject(res, forKey: key)
+        return res
+    }
+    private static let cache: NSCache<NSString, NSAttributedString> = { let c = NSCache<NSString, NSAttributedString>(); c.countLimit = 3000; return c }()
+
+    private static func build(_ s: String, size: CGFloat, weight: NSFont.Weight, color: NSColor,
+                              lineSpacing: CGFloat) -> NSAttributedString {
         let a = (try? AttributedString(markdown: s, options: .init(allowsExtendedAttributes: true, interpretedSyntax: .inlineOnlyPreservingWhitespace,
                                                                     failurePolicy: .returnPartiallyParsedIfPossible))) ?? AttributedString(s)
         let ps = NSMutableParagraphStyle()
