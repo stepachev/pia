@@ -43,3 +43,6 @@ feed.jsonl
 !/runtime-bin/node
 /mcp.json
 /models.json
+
+# душа агента (SOUL.md) — без личного, публична по решению пользователя 2026-11-24
+!/pia/SOUL.md
