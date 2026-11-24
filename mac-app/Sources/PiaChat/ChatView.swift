@@ -196,7 +196,7 @@ struct ChatView: View {
             .frame(height: inputHeight)
             .contentShape(Rectangle())
             .onTapGesture { if let tv = model.inputView { tv.window?.makeFirstResponder(tv) } }
-            .padding(.leading, 20)
+            .padding(.leading, 22 - 1.5 - 6)   // курсор и текст — по краю текста сообщений (22), полоса — левее, на полях
             .padding(.trailing, 22)
             .padding(.top, 8)
             .padding(.bottom, 14)
