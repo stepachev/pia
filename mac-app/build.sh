@@ -48,6 +48,9 @@ if [ ! -f build/AppIcon.icns ] || [ Resources/icon-source.png -nt build/AppIcon.
   iconutil -c icns build/AppIcon.iconset -o build/AppIcon.icns
 fi
 cp build/AppIcon.icns $APP/Contents/Resources/AppIcon.icns
+# схемы mermaid: библиотека pele (MIT) и страница-вставка для WKWebView — без загрузки из интернета
+mkdir -p $APP/Contents/Resources/mermaid
+cp Resources/mermaid/* $APP/Contents/Resources/mermaid/
 # службы launchd внутри бандла (SMAppService): macOS покажет их в «Объектах входа» одной строкой «pia» со значком приложения.
 # Пути ~/.pi-agent в plist абсолютные (нельзя $HOME) — подставляются для текущего пользователя до подписи.
 mkdir -p $APP/Contents/Library/LaunchAgents

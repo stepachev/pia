@@ -330,7 +330,7 @@ struct MessageRow: View, Equatable {
     private var assistant: some View {
         VStack(alignment: .leading, spacing: 8) {
             if !item.images.isEmpty { ImagesStrip(paths: item.images, height: 140, onZoom: onZoom) }
-            MarkdownView(text: item.text)
+            MarkdownView(text: item.text, onZoom: onZoom)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.trailing, 40)
@@ -393,7 +393,7 @@ struct ReportBlock: View {
             .onTapGesture { withAnimation(.snappy(duration: 0.25)) { expanded.toggle() } }
             Group {
                 if expanded {
-                    MarkdownView(text: body_, size: 13, secondary: true)
+                    MarkdownView(text: body_, size: 13, secondary: true, onZoom: onZoom)
                 } else {
                     MarkdownView(text: body_, size: 13, secondary: true, selectable: false)
                         .frame(maxHeight: 62, alignment: .top)

@@ -10,10 +10,28 @@ enum MDBlock: Equatable {
     case quote(String)
     case code(lang: String, text: String)
     case table(header: [String], rows: [[String]])
+    case images([String])
     case rule
 }
 
 enum MarkdownParser {
+    /// «![a](p) ![b](q)» → пути, если в строке только картинки и все файлы есть на диске (~ и file:// раскрываем).
+    static func imagePaths(_ t: String) -> [String]? {
+        guard t.hasPrefix("![") else { return nil }
+        let ms = t.matches(of: /!\[[^\]]*\]\(<?([^)>]+)>?\)/)
+        guard !ms.isEmpty, t.replacing(/!\[[^\]]*\]\(<?[^)>]+>?\)/, with: "").trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
+        var out: [String] = []
+        for m in ms {
+            var p = String(m.1).trimmingCharacters(in: .whitespaces)
+            if p.hasPrefix("file://") { p = URL(string: p)?.path ?? String(p.dropFirst(7)) }
+            p = (p.removingPercentEncoding ?? p) as String
+            p = (p as NSString).expandingTildeInPath
+            guard p.hasPrefix("/"), FileManager.default.fileExists(atPath: p) else { return nil }
+            out.append(p)
+        }
+        return out
+    }
+
     static func parse(_ src: String) -> [MDBlock] {
         var blocks: [MDBlock] = []
         let lines = src.replacingOccurrences(of: "\r\n", with: "\n").components(separatedBy: "\n")
@@ -40,6 +58,13 @@ enum MarkdownParser {
                 continue
             }
             if t.isEmpty { flushPara(); i += 1; continue }
+            // картинки: строка только из ![подпись](путь) к существующим локальным файлам (соседние строки — в один ряд)
+            if let paths = imagePaths(t) {
+                flushPara()
+                if case .images(let prev)? = blocks.last { blocks[blocks.count - 1] = .images(prev + paths) }
+                else { blocks.append(.images(paths)) }
+                i += 1; continue
+            }
             // заголовок
             if let m = t.firstMatch(of: /^(#{1,6})\s+(.*)$/) {
                 flushPara()
@@ -136,6 +161,8 @@ struct MarkdownView: View, Equatable {
     var secondary = false
     /// false — текст не выделяется и не перехватывает мышь (свёрнутый отчёт раскрывается щелчком)
     var selectable = true
+    /// щелчок по картинке из текста — увеличение (в сравнении не участвует)
+    var onZoom: (String) -> Void = { _ in }
 
     static func == (a: MarkdownView, b: MarkdownView) -> Bool {
         a.text == b.text && a.size == b.size && a.secondary == b.secondary && a.selectable == b.selectable
@@ -186,6 +213,11 @@ struct MarkdownView: View, Equatable {
                 textBlock(s, size: size, color: .secondaryLabelColor)
             }
             .fixedSize(horizontal: false, vertical: true)
+        case .images(let paths):
+            ImagesStrip(paths: paths, height: 160, onZoom: onZoom)
+                .padding(.vertical, 2)
+        case .code(let lang, let s) where lang.lowercased().hasPrefix("mermaid"):
+            MermaidView(source: s, size: size, selectable: selectable)
         case .code(_, let s):
             ScrollView(.horizontal, showsIndicators: false) {
                 Text(s)
