@@ -280,7 +280,7 @@ enum L {
         var out: [(CGPoint, CGFloat, Double)] = []
         // помощники и я тоже занят — та же фигура, но живее (×1.6)
         let tt = goo && (a == .pair || a == .waiting) ? t * 1.6 : t
-        draw(a, s: sp.s, t: tt) { out.append((CGPoint(x: $0.x, y: $0.y + dy), $1, $2)) }
+        draw(a, s: sp.s, t: tt) { out.append((CGPoint(x: $0.x, y: $0.y + dy), min($1, dot), $2)) }   // точки не крупнее dot ни в одном спиннере
         if goo && a != .pair && a != .waiting {
             let tr = traveler(CGSize(width: w, height: h), dot: dot, t: t)
             out.append((CGPoint(x: tr.0.x, y: tr.0.y + dy), tr.1, tr.2))
@@ -294,7 +294,7 @@ enum L {
         let speed = 1.75, d = S / 3.6
         let top = CGPoint(x: S / 2, y: d / 2), br = CGPoint(x: S - d / 2, y: S - d / 2), bl = CGPoint(x: d / 2, y: S - d / 2)
         // как в оригинале ldrs: углы «дышат» ×1.5 → 0 → ×1.5 со сдвигом по 1/3 — капля перетекает по кругу
-        let grow: [(Double, Double, Bezier)] = [(0, 1.5, .ease), (0.5, 0, .ease), (0.6, 0, .ease), (0.85, 1.5, .linear), (1, 1.5, .linear)]
+        let grow: [(Double, Double, Bezier)] = [(0, 1, .ease), (0.5, 0, .ease), (0.6, 0, .ease), (0.85, 1, .linear), (1, 1, .linear)]   // максимум = dot, как у всех
         for (p, dl) in [(top, 0.0), (br, 0.666), (bl, 0.333)] {
             put(p, d * keys(phase(t, speed, delay: -dl * speed), grow), 1)
         }
