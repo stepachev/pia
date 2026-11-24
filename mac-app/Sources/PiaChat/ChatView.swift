@@ -182,20 +182,24 @@ struct ChatView: View {
                     .padding(.top, 12)
                     .transition(.opacity.combined(with: .move(edge: .bottom)))
             }
-            // без подсказки-плейсхолдера: пустое поле с курсором
-            InputView(model: model, height: $inputHeight, maxHeight: inputMaxHeight, onEscape: escape)
-                .frame(height: inputHeight)
-            // капсула как у Raycast: ~36 px в одну строку, растёт вверх при многострочном вводе (радиус фиксированный 18)
-            .padding(.horizontal, 14)
-            .padding(.vertical, (36 - InputView.lineHeight - InputView.inset.height * 2) / 2)
-            .background(RoundedRectangle(cornerRadius: 20, style: .continuous).fill(Theme.inputFill)
-                .shadow(color: .black.opacity(0.05), radius: 3, y: 1))
-            .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).strokeBorder(Theme.inputStroke, lineWidth: 1))
+            // ввод как в терминале: без капсулы, только мигающий курсор; пока есть текст — слева полоса «моё сообщение»
+            // (место под полосу занято всегда, чтобы текст не прыгал). Откат — backups/pia.app.before-cursor-input-*
+            HStack(alignment: .top, spacing: 11) {
+                Capsule()
+                    .fill(Theme.bubble)
+                    .frame(width: 3)
+                    .padding(.vertical, 3)
+                    .opacity(model.draft.isEmpty ? 0 : 1)
+                    .animation(.easeOut(duration: 0.15), value: model.draft.isEmpty)
+                InputView(model: model, height: $inputHeight, maxHeight: inputMaxHeight, onEscape: escape)
+            }
+            .frame(height: inputHeight)
             .contentShape(Rectangle())
             .onTapGesture { if let tv = model.inputView { tv.window?.makeFirstResponder(tv) } }
-            .padding(.horizontal, 9)
-            .padding(.top, 6)
-            .padding(.bottom, 9)
+            .padding(.leading, 20)
+            .padding(.trailing, 22)
+            .padding(.top, 8)
+            .padding(.bottom, 14)
         }
         .animation(.snappy(duration: 0.2), value: model.attachments.count)
         .animation(.snappy(duration: 0.2), value: inputHeight)
