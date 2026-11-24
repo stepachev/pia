@@ -152,12 +152,12 @@ export const trimMarker = (where) => `[снимок убран из контек
 // Сообщения для запроса к модели → те же, но в старых сообщениях с картинками картинки заменены пометками.
 // Сообщения с картинками — от пользователя и результаты инструментов (у помощников: read картинки, снимки браузера).
 // Исходные объекты не меняются. Возвращает { messages, dropped (сообщений), images, removed (блоки картинок) }.
-export function trimImages(messages, { keep = IMAGE_KEEP, step = IMAGE_STEP, resolve, cwd = process.cwd() } = {}) {
+export function trimImages(messages, { keep = IMAGE_KEEP, step = IMAGE_STEP, drop: fixed, resolve, cwd = process.cwd() } = {}) {
   const withImg = [];
   messages.forEach((m, i) => {
     if ((m?.role === "user" || m?.role === "toolResult") && Array.isArray(m.content) && m.content.some((b) => b?.type === "image")) withImg.push(i);
   });
-  const drop = dropCount(withImg.length, keep, step);
+  const drop = fixed != null ? Math.min(fixed, withImg.length) : dropCount(withImg.length, keep, step);
   if (!drop) return { messages, dropped: 0, images: 0, removed: [] };
   const calls = new Map();
   for (const m of messages) if (m?.role === "assistant" && Array.isArray(m.content)) for (const b of m.content) if (b?.type === "toolCall") calls.set(b.id, b);
@@ -185,18 +185,30 @@ export function trimImages(messages, { keep = IMAGE_KEEP, step = IMAGE_STEP, res
 
 // Хук GenerationTask.beforeRequest (подключается в core.mjs как расширение image-trim): перед каждым запросом
 // к модели — trimImages. В журнал (log) пишет строку, когда граница сдвинулась: сколько снимков убрано и ≈ токенов.
+// Граница двигается, только когда кэш подсказок и так остыл (запросов в этом разговоре не было CACHE_COLD_MS)
+// или сверх keep накопилось больше IMAGE_MAX_EXTRA сообщений с картинками. Иначе сдвиг меняет начало запроса и
+// весь разговор (~100 тыс. токенов) пишется в кэш заново — в разы дороже, чем держать пару старых снимков в кэше.
+const CACHE_COLD_MS = 4.5 * 60_000;
+export const IMAGE_MAX_EXTRA = Math.max(1, Number(process.env.PIA_IMAGE_MAX_EXTRA) || 15);
 export function imageTrimHook({ resolve, cwd, modelId, keep = IMAGE_KEEP, step = IMAGE_STEP, log = () => {}, onError = () => {} } = {}) {
   const logged = new Map();   // разговор → сколько сообщений убрано в последний записанный раз
+  const state = new Map();    // разговор → { drop, count, at }: текущая граница и время последнего запроса
   return {
     beforeRequest: ({ messages }, api) => {
       try {
-        const r = trimImages(messages, { keep, step, resolve, cwd });
-        const conv = String(api?.conversationId ?? "?");
+        const conv = String(api?.conversationId ?? "?"), now = Date.now();
+        const count = messages.filter((m) => (m?.role === "user" || m?.role === "toolResult") && Array.isArray(m.content) && m.content.some((b) => b?.type === "image")).length;
+        const prev = state.get(conv);
+        const cold = !prev || count < prev.count || now - prev.at > CACHE_COLD_MS;   // нет истории, сжатие или кэш остыл
+        let drop = cold ? dropCount(count, keep, step) : prev.drop;
+        if (count - drop > keep + IMAGE_MAX_EXTRA) drop = dropCount(count, keep, step);
+        state.set(conv, { drop, count, at: now });
+        const r = trimImages(messages, { keep, step, drop, resolve, cwd });
         if (!r.dropped) { logged.delete(conv); return undefined; }
         if (logged.get(conv) !== r.dropped) {
           logged.set(conv, r.dropped);
           const saved = r.removed.reduce((a, b) => a + imageTokensOf(b, modelId), 0);
-          log(`картинки (разговор ${conv}): в запросе убрано ${r.images} шт. из ${r.dropped} старых сообщений, ≈ ${saved} ток. (с картинками остаются последние ${keep}–${keep + step - 1} сообщений)`);
+          log(`картинки (разговор ${conv}): в запросе убрано ${r.images} шт. из ${r.dropped} старых сообщений, ≈ ${saved} ток.${cold ? " (кэш остыл)" : ""}`);
         }
         return { messages: r.messages };
       } catch (e) { onError(e); return undefined; }
