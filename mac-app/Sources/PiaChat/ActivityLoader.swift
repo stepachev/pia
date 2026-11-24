@@ -298,11 +298,7 @@ enum L {
         for (p, dl) in [(top, 0.0), (br, 0.666), (bl, 0.333)] {
             put(p, d * keys(phase(t, speed, delay: -dl * speed), grow), 1)
         }
-        let ph = phase(t, speed)
-        let path: [CGPoint] = [top, br, bl, top]
-        let seg = min(2, Int(ph * 3)), u = Bezier.ease.y(ph * 3 - Double(seg))
-        let a = path[seg], b = path[seg + 1]
-        put(CGPoint(x: a.x + (b.x - a.x) * u, y: a.y + (b.y - a.y) * u), d, 1)
+        // без путника: перетекание — только за счёт «дыхания» углов
     }
 
     /// фаза 0..1 с CSS-задержкой (отрицательная задержка = сдвиг вперёд)
