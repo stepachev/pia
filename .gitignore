@@ -34,7 +34,6 @@ node_modules/
 /mac-app/build/
 /pia/память/
 /pia/mac-images/
-/pia/figwright-plugin/
 /вложения/
 /server.json
 *.sqlite*

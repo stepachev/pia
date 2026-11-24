@@ -1,5 +1,5 @@
-// HTTP для окон pia (Raycast, терминал): слушает только 127.0.0.1, все запросы — с Authorization: Bearer <token>.
-// Протокол (для Raycast):
+// HTTP для окон pia (окно pia, терминал): слушает только 127.0.0.1, все запросы — с Authorization: Bearer <token>.
+// Протокол (для окон):
 //   GET  /api/health                         → {"ok": true}
 //   GET  /api/history?after=<seq>&limit=<n>  → {"items": [{seq, role: user|assistant|report, text, images, ts}], "busy", "last"}
 //   POST /api/send {"text", "images": [абсолютные пути]} → {"ok": true, "seq"}
@@ -54,11 +54,11 @@ export function checkSend(body) {
   const pairs = (v) => (Array.isArray(v) ? v.filter((x) => Array.isArray(x) && x.length === 2 && x.every((y) => typeof y === "string")) : []);
   const tokens = pairs(body.tokens), pastes = pairs(body.pastes);
   if (!text.trim() && !images.length && !tokens.length) throw bad("пустое сообщение");
-  return { text, images, tokens, pastes, source: typeof body.source === "string" ? body.source.slice(0, 20) : "raycast" };
+  return { text, images, tokens, pastes, source: typeof body.source === "string" ? body.source.slice(0, 20) : "app" };
 }
 
 // Решение: можно ли принять сообщение. В чат как сообщение пользователя идёт только то, что набрал человек
-// (окно pia-app, Raycast, интерактивная pia). Возвращает причину отказа или null.
+// (окно pia-app, интерактивная pia). Возвращает причину отказа или null.
 export function sendVerdict(body, { fromHelper = false } = {}) {
   if (body && body.helper) return "из команды помощника";
   if (fromHelper) return "процесс-потомок помощника";

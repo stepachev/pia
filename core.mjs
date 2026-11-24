@@ -1,12 +1,12 @@
 // pia — ядро: главный разговор, помощники, сторож, сжатие. Живёт в фоновой службе (daemon.mjs),
-// окна (терминал — agent.mjs, Raycast) подключаются к нему по HTTP (server.mjs).
+// окна (терминал — agent.mjs, окно pia) подключаются к нему по HTTP (server.mjs).
 import fs from "node:fs";
 import { spawn } from "node:child_process";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { obj, str, num, opt, lit, union } from "@earendil-works/pi-schema";
 import { createRegistry, Harness, AssistantEntry, defineTool, defineExtension, section, configure, hook, CompactionTask, GenerationTask } from "@earendil-works/pi-durable";
 import { createToolSearchExtension } from "@earendil-works/pi-durable/tool-search";
-import { loadMcp, closeMcp } from "./mcp.mjs";
+import { loadMcp, closeMcp, hasMcpServer } from "./mcp.mjs";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { DatabaseSync } from "node:sqlite";
@@ -20,14 +20,17 @@ import { toolTrimHook } from "./tool-context.mjs";
 import { Feed, publicItem } from "./feed.mjs";
 import { killConvTree, TrackedEnv } from "./proctree.mjs";
 
+// Браузер Yab — необязательное дополнение: его подсказки и инструмент включаются, только если в mcp.json есть сервер yab-browser
+const YAB = hasMcpServer("yab-browser");
+const BROWSER = YAB ? [Browser] : [];
 let harness, Mcp, ToolSearch;   // открываются в openCore()
 
 // ── Характер ─────────────────────────────────────────────
 const CHARACTER = `Ты — личный помощник пользователя на его Mac. Кто ты и как говоришь — в SOUL.md ниже.
-Работаешь сам: файлы и команды, интернет, браузер Yab (пользователь в нём вошёл во все сайты), подключения (MCP — через tool_search), память. Папка по умолчанию: ${WORKDIR}.
+Работаешь сам: файлы и команды, интернет, ${YAB ? "браузер Yab (пользователь в нём вошёл во все сайты), " : ""}подключения (MCP — через tool_search), память. Папка по умолчанию: ${WORKDIR}.
 Клавиши называй маковские: ⌘ вместо Ctrl, ⌥ вместо Alt (Ctrl — только где на Mac именно Ctrl, например в терминале).
 Если в папке задачи есть инструкции (README, AGENTS.md) — сначала прочитай их. Существующие файлы правь инструментом edit.
-Проверяй результат на настоящем. Что видно глазами (вёрстка, кадры, вид окна) — проверь снимком сам: сайт — снимок своей вкладки Yab, программа — одного окна (screencapture -x -o -l <id>), не весь экран; 1–2 снимка нужного места, до 5–6 на задачу. Не проверил — так и скажи.
+Проверяй результат на настоящем. Что видно глазами (вёрстка, кадры, вид окна) — проверь снимком сам: ${YAB ? "сайт — снимок своей вкладки Yab, программа — одного" : "программа — снимок одного"} окна (screencapture -x -o -l <id>), не весь экран; 1–2 снимка нужного места, до 5–6 на задачу. Не проверил — так и скажи.
 Не вмешивайся в экран пользователя: мышь, клавиши и набор в его окна, новые окна Терминала, фокус, буфер обмена.
 Экономь контекст: большие выводы не печатай целиком — ищи нужное (grep, jq, read с offset/limit). Длинные ответы инструментов система обрезает, старые убирает — нужен снова, повтори вызов.
 Долгие команды — с timeout или в фоне (nohup … > лог &); после ошибки таймаута не повторяй то же самое.
@@ -40,11 +43,11 @@ const Soul = defineExtension({ name: "soul", sections: [section("soul", () => {
 const HELPER = `Ты — исполнитель части задачи для главного помощника. Сделай её сам до конца.
 Если в папке задачи есть инструкции (README, AGENTS.md, файлы с описанием процесса) — сначала прочитай их и следуй им. Подключения (MCP, если они настроены) находи через tool_search, только когда они нужны.
 Если во время работы придёт сообщение пользователя — оно главнее задания: учти его сразу.
-Работа с кодом: сначала прочитай AGENTS.md/README проекта и код вокруг места правки; найди причину, а не симптом. Существующие файлы правь инструментом edit (не write, не sed/python). После правки собери и проверь на настоящем (запуск, лог, код страницы, DOM). Что видно глазами (вёрстка, кадры, обрезка, вид окна) — проверь снимком сам, не перекладывай на пользователя. Снимки экономно: сайт — снимок своей вкладки Yab (tool_search «yab screenshot»), программа — одного окна (screencapture -x -o -l <id окна>), не весь экран; сначала найди место текстом (DOM, код) и прокрути к нему, потом 1–2 снимка; не снимай каждый шаг прокрутки; не больше 5–6 снимков на задачу. Нельзя: двигать мышь, нажимать клавиши и набирать в окна пользователя, открывать окна Терминала, забирать фокус, трогать буфер обмена. Не удалось проверить на настоящем — прямо так и напиши.
+Работа с кодом: сначала прочитай AGENTS.md/README проекта и код вокруг места правки; найди причину, а не симптом. Существующие файлы правь инструментом edit (не write, не sed/python). После правки собери и проверь на настоящем (запуск, лог, код страницы, DOM). Что видно глазами (вёрстка, кадры, обрезка, вид окна) — проверь снимком сам, не перекладывай на пользователя. Снимки экономно: ${YAB ? "сайт — снимок своей вкладки Yab (tool_search «yab screenshot»), программа — одного" : "программа — снимок одного"} окна (screencapture -x -o -l <id окна>), не весь экран; сначала найди место текстом (DOM, код) и прокрути к нему, потом 1–2 снимка; не снимай каждый шаг прокрутки; не больше 5–6 снимков на задачу. Нельзя: двигать мышь, нажимать клавиши и набирать в окна пользователя, открывать окна Терминала, забирать фокус, трогать буфер обмена. Не удалось проверить на настоящем — прямо так и напиши.
 Если в задании есть «Готово, когда» — отчёт начинай с них: по строке на пункт, ✅ + как проверено (команда/что показала), ❔ не проверено (почему), ❌ не сделано. ✅ ставь, только если сам проверил и видел результат; «должно работать» — это ❔. Отчёт по коду — до 10 строк: причина, что изменено (файлы), как проверено.
 Остальные отчёты — сжато, до 5 строк: только ответ на задачу (факты, цифры), 1–2 источника короткими ссылками, что не вышло. Без вступлений и пересказа процесса.
 Сверяй источники, после действий на сайте проверяй результат. Не плати, не отправляй и не удаляй ничего. По-русски.
-Node-скрипты запускай командой \`node\` (она есть в PATH службы) или process.execPath, а не \`pia\`: \`pia\` — это чат.\nЗависания: у каждой команды есть таймаут (bash по умолчанию 120 с, браузер ${LIMITS.browser.def} с). Скрипты Node/Playwright/CDP обязательно завершай (browser.close() или process.exit() и в catch тоже) и запускай с \`timeout N\`. Долгое (ffmpeg, заливка, опрос) — запускай с явным timeout побольше или в фоне (nohup … > лог &) и проверяй короткими командами; опрос — с лимитом времени. Если пришла ошибка про таймаут или сообщение сторожа — не повторяй то же самое, выбери другой путь.`;
+Node-скрипты запускай командой \`node\` (она есть в PATH службы) или process.execPath, а не \`pia\`: \`pia\` — это чат.\nЗависания: у каждой команды есть таймаут (bash по умолчанию 120 с${YAB ? `, браузер ${LIMITS.browser.def} с` : ""}). Скрипты Node/Playwright/CDP обязательно завершай (browser.close() или process.exit() и в catch тоже) и запускай с \`timeout N\`. Долгое (ffmpeg, заливка, опрос) — запускай с явным timeout побольше или в фоне (nohup … > лог &) и проверяй короткими командами; опрос — с лимитом времени. Если пришла ошибка про таймаут или сообщение сторожа — не повторяй то же самое, выбери другой путь.`;
 
 // ── Помощники (субагенты) в фоне ──────────────────────────
 // helper сразу возвращает номер помощника: главный не ждёт и отвечает пользователю,
@@ -175,7 +178,7 @@ let closing = false;
 // smart — по умолчанию (в т.ч. код); fast — простое без браузера; opus — только по прямой просьбе пользователя
 const helperRole = (m) => (m === "opus" ? ROLES.opus : m === "fast" ? ROLES.fast : ROLES.smart);
 const helperModelName = (m) => (m === "opus" || m === "fast" ? m : "smart");
-const helperExtensions = () => [Files, Web, Browser, Memory, Mcp, ToolSearch, CheapCompaction, CacheFix, ImageTrim, ToolTrim];
+const helperExtensions = () => [Files, Web, ...BROWSER, Memory, Mcp, ToolSearch, CheapCompaction, CacheFix, ImageTrim, ToolTrim];
 async function startHelper(key, args, ctx) {
   let rec = store.items[key];
   if (!rec) {
@@ -249,7 +252,7 @@ async function runHelper(args, api, ctx) {
           // По умолчанию — smart (в т.ч. вся работа в браузере); fast только по явному fast
           model: ref(helperRole(args.model)), thinkingLevel: helperRole(args.model).thinking,
           instructions: HELPER, maxTurns: 80, compaction: COMPACTION,
-          extensions: [Files, Web, Browser, Memory, Mcp, ToolSearch, CheapCompaction, CacheFix, ImageTrim],
+          extensions: [Files, Web, ...BROWSER, Memory, Mcp, ToolSearch, CheapCompaction, CacheFix, ImageTrim],
         });
         return created.id;
       }, ctx);
@@ -554,7 +557,7 @@ export async function openCore() {
   ({ ext: Mcp } = await loadMcp());
   ToolSearch = createToolSearchExtension();
   const registry = createRegistry();
-  for (const ext of [Soul, Files, Web, Browser, Memory, Mcp, ToolSearch, Helpers, Past, CheapCompaction, CacheFix, ImageTrim, ToolTrim, DebugPayload]) registry.install(ext);
+  for (const ext of [Soul, Files, Web, ...BROWSER, Memory, Mcp, ToolSearch, Helpers, Past, CheapCompaction, CacheFix, ImageTrim, ToolTrim, DebugPayload]) registry.install(ext);
   // Команды помощников идут через TrackedEnv: учёт процессов и метки PIA_CONV/PIA_HELPER в окружении (см. proctree.mjs)
   const env = ({ cwd, conversationId }) => new TrackedEnv({ cwd: cwd ?? WORKDIR }, conversationId);
   harness = await Harness.open(await openNodeSqliteStorage(`${APP}/memory.sqlite`), {
@@ -564,7 +567,7 @@ export async function openCore() {
   // Главный: все инструменты сам; помощники — только для фоновой/параллельной работы.
   // Модель — роль main из models.json (по умолчанию Opus 5.5, medium); PIA_MAIN_MODEL=haiku|fast — дёшево, для проверочного экземпляра
   const agent = { compaction: MAIN_COMPACTION, model: ref(ROLES.main), thinkingLevel: ROLES.main.thinking, cwd: WORKDIR, instructions: CHARACTER,
-    extensions: [Soul, Files, Web, Browser, Memory, Mcp, ToolSearch, Helpers, Past, CheapCompaction, CacheFix, ImageTrim, ToolTrim, DebugPayload] };
+    extensions: [Soul, Files, Web, ...BROWSER, Memory, Mcp, ToolSearch, Helpers, Past, CheapCompaction, CacheFix, ImageTrim, ToolTrim, DebugPayload] };
   const mapFile = `${APP}/chats.json`;
   const map = fs.existsSync(mapFile) ? JSON.parse(fs.readFileSync(mapFile, "utf8")) : {};
   let chat = map.main != null ? await harness.conversation(map.main, context) : undefined;
@@ -762,7 +765,7 @@ export async function openCore() {
   onReport = () => { flushReports(); };
 
   // Сообщение пользователя из любого окна. Возвращает запись ленты (её seq — ответ /api/send).
-  async function send({ text = "", images = [], tokens = [], pastes = [], source = "raycast" }) {
+  async function send({ text = "", images = [], tokens = [], pastes = [], source = "app" }) {
     const line = text.trim();
     // Команда остановки — без модели (работает и при исчерпанном лимите)
     // «стоп» с автоконтекстом окна (<context>…</context> + его скриншот context-*.png) — тоже команда остановки
@@ -791,7 +794,7 @@ export async function openCore() {
       return item;
     }
     if (!busy && ["/compact", "/сжать"].includes(line)) { const item = feed.addUser({ text, source }); compact(); return item; }
-    // Картинки из Raycast — пометками «[картинка N]» в конце текста (как вставка в терминале)
+    // Картинки из окна pia — пометками «[картинка N]» в конце текста (как вставка в терминале)
     const tok = new Map(tokens);
     let t = text;
     for (const file of images) {

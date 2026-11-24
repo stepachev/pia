@@ -4,7 +4,7 @@
 // Секунды. Явно заданный помощником timeout можно увеличить до MAX (ffmpeg, заливка видео и т.п.).
 export const LIMITS = {
   bash: { def: 120, max: 3600 },      // терминальные команды
-  browser: { def: 60, max: 300, killMarginSec: 15 },     // yab exec (раньше 90 / 600); +15 с и SIGKILL
+  browser: { def: 60, max: 300, killMarginSec: 15 },     // yab exec; +15 с и SIGKILL
   mcp: { def: 120, max: 120 },        // вызов MCP (раньше 300)
   web: { def: 20, max: 20 },          // поиск и чтение страницы
 };

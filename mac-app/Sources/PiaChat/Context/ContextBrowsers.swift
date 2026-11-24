@@ -12,7 +12,7 @@ enum ContextBrowsers {
         var title: String?
     }
 
-    /// Yab (браузер пользователя): bundle id dev.serafim.fast, AppleScript как у Chrome
+    /// Yab: bundle id dev.serafim.fast, AppleScript как у Chrome
     /// (`active tab of front window`, свойства URL и title).
     static let yabBundleId = "dev.serafim.fast"
 

@@ -145,6 +145,8 @@ else
   fi
 fi
 mkdir -p "$ROOT/pia" 2>/dev/null
+# список подключений (MCP) для новой установки — пустой; свои добавляются по README
+[ "$DRY" = 0 ] && [ ! -e "$ROOT/mcp.json" ] && printf '{\n  "mcpServers": {}\n}\n' > "$ROOT/mcp.json"
 # пути в mcp.json могут быть прописаны под другого владельца — подставляем свой дом
 OLD_HOME=$(grep -oE -m1 '/Users/[^/"]+' "$ROOT/mcp.json" 2>/dev/null | head -1)
 if [ -n "$OLD_HOME" ] && [ "$OLD_HOME" != "$HOME" ]; then

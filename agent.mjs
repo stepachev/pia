@@ -1,6 +1,6 @@
 // pia — окно в терминале. Сам разговор, помощники и сторож живут в фоновой службе (daemon.mjs → core.mjs),
 // которая работает и без открытого терминала; окно подключается к ней по HTTP (server.json) и показывает тот же
-// общий разговор, что и Raycast. Закрыть окно (Ctrl+D) — работа продолжается в фоне.
+// общий разговор, что и окно pia. Закрыть окно (Ctrl+D) — работа продолжается в фоне.
 import fs from "node:fs";
 import readline from "node:readline";
 import { LiveArea, MdStream, clipEnd, detectTheme, footerRows, userCardRows, foldContext, isCtxNote } from "./render.mjs";
@@ -89,7 +89,7 @@ async function askOnce(text) {
   if (s && !s.busy && !sawBusy) setTimeout(finish, 3000);   // ход уже закончился до подключения
   await done;
   flush(); st.close(); process.off("SIGINT", onSig);
-  if (helpersRunning) errSay(`Помощники работают в фоне (${helpersRunning}) — отчёт придёт в общий разговор (pia или Raycast).`);
+  if (helpersRunning) errSay(`Помощники работают в фоне (${helpersRunning}) — отчёт придёт в общий разговор (pia).`);
 }
 
 if (args[0] === "/compact") {
@@ -280,7 +280,7 @@ editor = new Editor({
     if (line === "/usage") { const { usageText } = await import("./usage.mjs"); block(usageText().split("\n")); return draw(); }
     if (line === "/compact" && live.busy) { block([dim("Сейчас занят — сожму после ответа, повтори чуть позже.")]); return draw(); }
     if (line === "/compact") { post("/api/compact", {}, 15 * 60_000).catch((e) => { block(["Не вышло: " + e.message]); draw(); }); return; }
-    // Сообщение уходит в общий разговор; плашка придёт обратно событием (так же, как сообщения из Raycast)
+    // Сообщение уходит в общий разговор; плашка придёт обратно событием (так же, как сообщения из окна pia)
     try { await post("/api/send", { text, tokens: [...images], pastes: [...pastes], source: "terminal" }, 60_000); }
     catch (e) { block([`Не отправилось: ${e.message}`]); draw(); }
   },

@@ -10,7 +10,12 @@ import { LIMITS, guardTool } from "./guard.mjs";
 
 export const MCP_FILE = `${APP}/mcp.json`;
 
-// MCP-серверы (например, Yab) отдают схемы с ключами в случайном порядке. Если не упорядочить,
+// Есть ли в mcp.json включённый сервер с таким именем (читается один раз при старте)
+export function hasMcpServer(name) {
+  try { const c = JSON.parse(fs.readFileSync(MCP_FILE, "utf8")).mcpServers?.[name]; return !!c && !c.disabled; } catch { return false; }
+}
+
+// MCP-серверы отдают схемы с ключами в случайном порядке. Если не упорядочить,
 // при каждом запуске инструменты «меняются», и вся история разговора уходит мимо кэша (платится заново).
 function stable(v, key) {
   if (Array.isArray(v)) { const a = v.map((x) => stable(x)); return key === "required" ? [...a].sort() : a; }

@@ -576,7 +576,7 @@ final class PiaBackgroundView: NSView {
         layer?.masksToBounds = true
         registerForDraggedTypes(PiaDrop.types)
         layer?.borderWidth = 0.5   // край как у Raycast AI Chat: 0.5 pt, почти незаметный
-        // фон как у Raycast Notes: размытие того, что под окном, + молочная подкраска (как в Perevod, bg=blur)
+        // фон как у Raycast Notes: размытие того, что под окном, + молочная подкраска (bg=blur)
         let fx = NSVisualEffectView(frame: bounds)
         fx.material = .hudWindow; fx.blendingMode = .behindWindow; fx.state = .active
         fx.autoresizingMask = [.width, .height]

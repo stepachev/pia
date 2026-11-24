@@ -138,7 +138,7 @@ export async function buildMessage(text, tokens = new Map()) {
   found.sort((a, b) => a.index - b.index);
   if (!found.length) return { content: text, card: text, notes: [], files: [] };
   let modelText = "", card = "", at = 0;
-  const images = [], notes = [], files = [];   // files — пути прикреплённых картинок (для истории Raycast)
+  const images = [], notes = [], files = [];   // files — пути прикреплённых картинок (для истории)
   let n = 0;
   for (const f of found) {
     n++;
