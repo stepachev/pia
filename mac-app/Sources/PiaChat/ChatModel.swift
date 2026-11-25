@@ -31,6 +31,10 @@ final class ChatModel {
     var helpersExpanded = false
     var loadingOlder = false
     var noOlder = false
+    /// сколько последних сообщений держать в ленте: чем их меньше, тем легче прокрутка; старые — ⌘↑ или прокруткой к началу
+    static let feedKeep = 30
+    /// пользователь сам подгрузил старые — ленту не обрезаем, пока он не отправит сообщение
+    var keepOlder = false
     var scrollToBottomToken = 0          // изменилось — лента прокручивается вниз
     var newAnswerSeq = 0                 // пришёл новый ответ (не из истории) — лента держит его начало у верха
     var anchorAfterPrepend: Int?         // после подгрузки старых — держать этот seq наверху
@@ -76,7 +80,7 @@ final class ChatModel {
         let gen = pollGen
         do {
             let first = !loadedOnce
-            let h = try await client.history(after: lastSeq, limit: first ? 80 : 300)
+            let h = try await client.history(after: lastSeq, limit: first ? Self.feedKeep : 300)
             let seqBefore = lastSeq
             merge(h, animated: !first)
             let newAnswer = h.items.contains { $0.role == "assistant" && !$0.isPartial && $0.seq > seqBefore }
@@ -173,6 +177,11 @@ final class ChatModel {
         if animated && newAssistant > 0 { newAnswerSeq = newAssistant }
         if let last = h.last { lastSeq = max(lastSeq, last) }
         else if let m = h.items.filter({ !$0.isPartial }).map(\.seq).max() { lastSeq = max(lastSeq, m) }
+        // лента не растёт бесконечно: держим последние feedKeep (с запасом, чтобы не резать на каждом сообщении)
+        if !keepOlder && list.count > Self.feedKeep + 15 {
+            list.removeFirst(list.count - Self.feedKeep)
+            noOlder = false; changed = true
+        }
         if changed {
             if animated && appended {
                 withAnimation(.spring(response: 0.35, dampingFraction: 0.9)) { items = list }
@@ -197,6 +206,7 @@ final class ChatModel {
                 let older = h.items.filter { $0.seq < first && !$0.isPartial && $0.role != "report" }
                 if older.isEmpty { noOlder = true; return }
                 anchorAfterPrepend = first
+                keepOlder = true
                 items = older + items
                 if after == 0 { noOlder = true }
                 Log.write("подгружено раньше: \(older.count)")
@@ -211,6 +221,7 @@ final class ChatModel {
     var canSend: Bool { !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty }
 
     func send() {
+        keepOlder = false
         guard canSend else { return }
         let userText = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         if attachments.isEmpty, Self.permissionCommands.contains(userText.lowercased()) {

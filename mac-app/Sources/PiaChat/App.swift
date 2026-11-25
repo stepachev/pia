@@ -143,6 +143,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
 
         let urls = pendingURLs; pendingURLs = []
+        if panel?.isVisible != true { LoaderClock.shared.setHidden(true) }   // запуск службой (--hidden): окна не видно — спиннер стоит
         if UserDefaults.standard.bool(forKey: Permissions.reopenKey) {
             // перезапуск кнопкой «Перезапустить pia» в мастере — сразу вернуть мастер
             UserDefaults.standard.removeObject(forKey: Permissions.reopenKey)
@@ -365,7 +366,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private func startPassThrough() {
         passTimer?.invalidate()
         let t = Timer(timeInterval: 1.0 / 30, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.updatePassThrough() }
+            MainActor.assumeIsolated { self?.updatePassThrough(); self?.checkEdgeLeave() }
         }
         RunLoop.main.add(t, forMode: .common)   // и во время перетаскивания/изменения размера
         passTimer = t
@@ -388,11 +389,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         panel.ignoresMouseEvents = ignore
     }
 
+    /// выехавшее с края окно прячется, когда мышь ушла от карточки (если ничего не набрано)
+    private var edgeOutsideSince: Date?
+    private func checkEdgeLeave() {
+        guard let panel, panel.isVisible, edgeShown, !edgeAnimating, !TestHooks.offscreen, !perms.wizardVisible else { edgeOutsideSince = nil; return }
+        let near = panel.cardFrame.insetBy(dx: -24, dy: -24).contains(NSEvent.mouseLocation)
+        let typed = !model.draft.isEmpty || !model.attachments.isEmpty
+        if near || typed || NSEvent.pressedMouseButtons != 0 || model.zoomImage != nil { edgeOutsideSince = nil; return }
+        if edgeOutsideSince == nil { edgeOutsideSince = Date(); return }
+        if Date().timeIntervalSince(edgeOutsideSince!) > 0.35 { edgeOutsideSince = nil; hide(reason: "мышь ушла от выехавшего окна") }
+    }
+
     // MARK: место окна
 
     /// Окно двинули (перетаскивание, размер за верх/лево) — запомнить, где стоит карточка
     func windowDidMove(_ n: Notification) {
-        guard let panel, panel.isVisible, !TestHooks.offscreen, !edgeAnimating else { return }
+        guard let panel, panel.isVisible, !TestHooks.offscreen, !edgeAnimating, Date().timeIntervalSince(shownAt) > 0.5 else { return }
         edgeShown = false   // окно передвинули руками — дальше обычное поведение
         let o = panel.cardFrame.origin
         UserDefaults.standard.set(o.x, forKey: "pia.window.x")
@@ -427,8 +439,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func show(source: String = "", fromEdge: Bool = false) {
         guard let panel else { return }
         hideGen += 1                         // отменяет незавершённое скрытие
+        LoaderClock.shared.setHidden(false)
         let wasVisible = panel.isVisible && panel.alphaValue > 0.99
         var slideTo: NSPoint?
+        if panel.isVisible && edgeShown && edgeAnimating && fromEdge, let o = edgeOrigin() {
+            slideTo = o   // снова подвели мышь, пока окно уезжало — выезжает обратно
+        } else if panel.isVisible && edgeAnimating && !fromEdge {
+            edgeAnimating = false; edgeShown = false
+            placePanel()
+        }
         if !panel.isVisible {
             if fromEdge, let o = edgeOrigin() {
                 edgeAnimating = true
@@ -462,16 +481,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             focusPanel()
             // активация из фона (двойной правый Shift) бывает отложенной — проверяем и повторяем
             let gen = hideGen
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
-                guard let self, gen == self.hideGen, self.panel.isVisible else { return }
-                if !self.isFrontmost || !self.panel.isKeyWindow { self.focusPanel() }
-                Log.write("окно: key=\(self.panel.isKeyWindow), pia впереди=\(self.isFrontmost)")
+            // частые повторы в начале — мигающий курсор в поле ввода виден сразу, а не через треть секунды
+            for t in [0.03, 0.1, 0.2, 0.3] {
+                DispatchQueue.main.asyncAfter(deadline: .now() + t) { [weak self] in
+                    guard let self, gen == self.hideGen, self.panel.isVisible else { return }
+                    let tv = self.model.inputView
+                    if !self.isFrontmost || !self.panel.isKeyWindow || (tv != nil && self.panel.firstResponder !== tv && !self.perms.wizardVisible) { self.focusPanel() }
+                    if t == 0.3 { Log.write("окно: key=\(self.panel.isKeyWindow), pia впереди=\(self.isFrontmost)") }
+                }
             }
         }
         if let to = slideTo {
             // «выскакивает» из края: едет влево с лёгким перелётом и проявляется
             NSAnimationContext.runAnimationGroup({ ctx in
-                ctx.duration = 0.32
+                ctx.duration = 0.24
                 ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.2, 1.25, 0.35, 1)
                 panel.animator().setFrame(NSRect(origin: to, size: panel.frame.size), display: true)
                 panel.animator().alphaValue = 1
@@ -519,18 +542,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let toEdge = edgeShown
         if toEdge { edgeAnimating = true }
         NSAnimationContext.runAnimationGroup({ ctx in
-            ctx.duration = toEdge ? 0.18 : 0.1
+            ctx.duration = toEdge ? 0.26 : 0.1
             if toEdge {
-                ctx.timingFunction = CAMediaTimingFunction(name: .easeIn)
-                panel.animator().setFrameOrigin(NSPoint(x: panel.frame.minX + 70, y: panel.frame.minY))   // уезжает обратно в край
+                // ускакивает обратно за правый край: лёгкий замах влево и рывок вправо, без растворения
+                ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.45, -0.35, 0.75, 0.6)
+                let maxX = (panel.screen ?? NSScreen.main)?.frame.maxX ?? panel.frame.maxX
+                // именно setFrame: у окна анимируется только frame, setFrameOrigin через animator() просто прыгает в конец
+                var f = panel.frame; f.origin.x = maxX - PiaPanel.margin + 4
+                panel.animator().setFrame(f, display: true)
+            } else {
+                panel.animator().alphaValue = 0
             }
-            panel.animator().alphaValue = 0
         }, completionHandler: { [weak self] in
             Task { @MainActor in
                 // окно успели показать снова — не прятать
-                guard let self, gen == self.hideGen else { return }
+                guard let self else { return }
+                if toEdge { self.edgeAnimating = false }   // иначе повторный показ во время отъезда «залипал»: окно больше не пряталось
+                guard gen == self.hideGen else { return }
                 self.panel.orderOut(nil)
                 self.panel.alphaValue = 1
+                LoaderClock.shared.setHidden(true)   // спрятанное окно не анимирует спиннер (иначе ~40% процессора впустую)
                 self.edgeAnimating = false
                 if NSApp.isActive { NSApp.hide(nil) }   // фокус возвращается в прежнее приложение
             }

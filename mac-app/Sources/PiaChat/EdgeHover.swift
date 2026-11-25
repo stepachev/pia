@@ -1,7 +1,7 @@
 import AppKit
 
 /// Наведение курсора на правый край экрана по центру (средняя треть высоты) — показать окно pia.
-/// Курсор должен постоять у края ~0,25 с: случайный пролёт мимо не считается.
+/// Курсор должен постоять у края ~0,12 с: случайный пролёт мимо не считается.
 /// Край считается только если справа нет другого монитора. Разрешений не требует (только движение мыши).
 final class EdgeHoverMonitor {
     static let key = "edgeHoverEnabled"
@@ -45,7 +45,7 @@ final class EdgeHoverMonitor {
         let p = NSEvent.mouseLocation
         if EdgeHoverMonitor.inZone(p) {
             guard !fired, timer == nil else { return }
-            timer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: false) { [weak self] _ in
+            timer = Timer.scheduledTimer(withTimeInterval: 0.12, repeats: false) { [weak self] _ in
                 guard let self else { return }
                 self.timer = nil
                 if EdgeHoverMonitor.inZone(NSEvent.mouseLocation) { self.fired = true; self.onTrigger() }

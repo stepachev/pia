@@ -34,6 +34,16 @@ enum TestHooks {
         }
         if env["PIA_TEST_DROP"] == "1" { dropTest(m, env["PIA_TEST_ATTACH"] ?? "") }
         if env["PIA_TEST_CYCLE"] == "1" { cycle(app) }
+        // PIA_TEST_SCROLL=1 — через 3 с листать ленту вверх-вниз 6 с (как инерция трекпада); PIA_TEST_SCROLL_NOPAUSE=1 — спиннер не замирает (сравнение)
+        if env["PIA_TEST_SCROLL"] == "1" { scrollTest(app, pause: env["PIA_TEST_SCROLL_NOPAUSE"] != "1") }
+        if env["PIA_TEST_PAUSE"] == "1" { DispatchQueue.main.asyncAfter(deadline: .now() + 2) { LoaderClock.shared.setHidden(true) } }   // проверка паузы спиннера
+        // PIA_TEST_EDGE=1 — спрятать, выехать с края, через 1,5 с уехать обратно (проверка анимации отъезда)
+        if env["PIA_TEST_EDGE"] == "1" {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { app.hide(reason: "тест"); DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { app.show(source: "тест-край", fromEdge: true)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { app.hide(reason: "тест-край: обратно") } } }
+        }
+        // PIA_TEST_HIDE_AFTER=сек — показать и спрятать (замер процессора у спрятанного окна)
+        if let h = env["PIA_TEST_HIDE_AFTER"], let sec = Double(h) { DispatchQueue.main.asyncAfter(deadline: .now() + sec) { app.hide(reason: "тест: спрятать") } }
         if let d = env["PIA_TEST_DRAFT"] { m.draft = d }
         if env["PIA_TEST_HELPERS"] == "1" { m.helpersExpanded = true }
         // PIA_TEST_SNAPSHOT=путь.png — через 4 с снять содержимое своего окна в PNG (без права «Запись экрана»)
@@ -141,6 +151,27 @@ enum TestHooks {
         ]
         for (t, name, f) in steps {
             DispatchQueue.main.asyncAfter(deadline: .now() + t) { f(); Log.write("тест-цикл: \(name) — \(traffic(p))") }
+        }
+    }
+
+    static func scrollTest(_ app: AppDelegate, pause: Bool) {
+        func scrollViews(_ v: NSView) -> [NSScrollView] { (v as? NSScrollView).map { [$0] } ?? [] + v.subviews.flatMap(scrollViews) }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+            guard let root = app.panel?.contentView,
+                  let sv = scrollViews(root).max(by: { ($0.documentView?.frame.height ?? 0) < ($1.documentView?.frame.height ?? 0) }) else { return }
+            let start = Date(); var frames = 0; var worst = 0.0; var last = Date()
+            Log.write("тест-прокрутка: старт, высота ленты \(Int(sv.documentView?.frame.height ?? 0))")
+            Timer.scheduledTimer(withTimeInterval: 1.0 / 120, repeats: true) { t in
+                MainActor.assumeIsolated {
+                    let now = Date(); worst = max(worst, now.timeIntervalSince(last)); last = now; frames += 1
+                    let el = now.timeIntervalSince(start)
+                    if el > 6 { t.invalidate(); Log.write("тест-прокрутка: шагов \(frames), худший промежуток \(Int(worst * 1000)) мс"); return }
+                    if pause { LoaderClock.shared.scrolled() }
+                    var o = sv.contentView.bounds.origin
+                    o.y += CGFloat(sin(el * 2) * 14)
+                    sv.contentView.scroll(to: o); sv.reflectScrolledClipView(sv.contentView)
+                }
+            }
         }
     }
 }

@@ -73,7 +73,7 @@ struct ActivityLoader: View {
             if reduceMotion {
                 LoaderShape(activity: activity, dot: dot, t: 0, goo: goo)
             } else {
-                TimelineView(.animation(minimumInterval: 1.0 / 60)) { ctx in
+                TimelineView(.animation(minimumInterval: 1.0 / 60, paused: LoaderClock.shared.paused)) { ctx in
                     let t = ctx.date.timeIntervalSinceReferenceDate
                     let k = morph.map { min(1, ctx.date.timeIntervalSince($0.at) / Self.morphSeconds) } ?? 1
                     MorphFrame(from: morph.map { ($0.from, $0.fromGoo) } ?? (activity, goo), to: (activity, goo), k: k, dot: dot, t: t)
@@ -473,5 +473,33 @@ enum LoaderSheet {
               let png = rep.representation(using: .png, properties: [:]) else { print("не отрисовалось"); return }
         try? png.write(to: URL(fileURLWithPath: path))
         print("ok \(path)")
+    }
+}
+
+/// Пауза анимаций спиннера. Каждый его кадр в SwiftUI — проход вёрстки всего окна (~20% главного потока, ~40% процессора):
+/// пока окно спрятано, анимация не нужна вовсе, а пока пользователь листает ленту — главный поток отдаём прокрутке.
+@MainActor @Observable
+final class LoaderClock {
+    static let shared = LoaderClock()
+    private(set) var paused = false
+    private var hidden = false
+    private var scrollUntil = Date.distantPast
+    @ObservationIgnored private var resumeWork: DispatchWorkItem?
+
+    func setHidden(_ h: Bool) { hidden = h; update() }
+
+    /// прокрутка колесом/трекпадом: замираем и оживаем через 0,35 с после последнего события (включая инерцию)
+    func scrolled() {
+        scrollUntil = Date().addingTimeInterval(0.35)
+        update()
+        resumeWork?.cancel()
+        let w = DispatchWorkItem { [weak self] in self?.update() }
+        resumeWork = w
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.36, execute: w)
+    }
+
+    private func update() {
+        let p = hidden || Date() < scrollUntil
+        if p != paused { paused = p }
     }
 }

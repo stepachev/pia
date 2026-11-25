@@ -121,12 +121,16 @@ struct ChatView: View {
                 guard wheelMonitor == nil else { return }
                 wheelMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { ev in
                     guard let w = ev.window, let cv = w.contentView else { return ev }
+                    if ev.scrollingDeltaY != 0 || ev.momentumPhase != [] { LoaderClock.shared.scrolled() }   // спиннер замирает, пока листают (и над текстом сообщений)
                     var v: NSView? = cv.hitTest(cv.convert(ev.locationInWindow, from: nil))
                     while let x = v { if x is NSTextView { return ev }; v = x.superview }
                     let dy = ev.scrollingDeltaY
                     // пользователь сам листает длинный ответ — якорь снят, лента стоит, пока он не докрутит до низа
                     if scroll.anchorSeq != nil && dy != 0 { scroll.anchorSeq = nil; atBottom = false }
-                    if dy > 0 { atBottom = false }
+                    if dy > 0 {
+                        atBottom = false
+                        if metrics.offset < 400 { model.loadOlder() }   // докрутил к началу — подгрузить более ранние
+                    }
                     else if dy < 0 || ev.momentumPhase != [] {
                         // дистанцию читаем после применения прокрутки
                         DispatchQueue.main.async {
@@ -516,7 +520,7 @@ struct JellyDots: View {
     var count: Int
     var body: some View {
         let n = max(1, min(3, count))
-        TimelineView(.animation(minimumInterval: 1 / 60)) { ctx in
+        TimelineView(.animation(minimumInterval: 1 / 60, paused: LoaderClock.shared.paused)) { ctx in
             let t = ctx.date.timeIntervalSinceReferenceDate
             Canvas { gc, size in
                 let c = CGPoint(x: size.width / 2, y: size.height / 2)
@@ -552,7 +556,7 @@ struct JellyDots: View {
 /// тонкая серая точка, мягко «дышит»
 struct PulseDot: View {
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1 / 30)) { ctx in
+        TimelineView(.animation(minimumInterval: 1 / 30, paused: LoaderClock.shared.paused)) { ctx in
             let t = ctx.date.timeIntervalSinceReferenceDate
             let p = (sin(t * 2 * .pi / 1.8) + 1) / 2
             Circle().fill(Color.primary.opacity(0.22 + 0.22 * p)).frame(width: 5, height: 5)
@@ -705,3 +709,4 @@ func shortTitle(_ title: String?) -> String {
     if r.hasPrefix("«") && !r.contains("»") { r.removeFirst() }
     return r.isEmpty ? "задача" : r
 }
+

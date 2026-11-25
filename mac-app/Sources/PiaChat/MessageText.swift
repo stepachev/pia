@@ -126,6 +126,9 @@ final class PiaTextView: NSTextView {
                                 .underlineStyle: NSUnderlineStyle.single.rawValue,
                                 .cursor: NSCursor.pointingHand]
         v.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        // с macOS 14 вид по умолчанию не обрезан своими краями: каждая полоска, открытая прокруткой, «задевала» все тексты ленты
+        // и они перерисовывались на каждом шаге (~44 раза за шаг) — отсюда рывки. Обрезка по краям — рисуется только свой текст.
+        v.clipsToBounds = true
         return v
     }
 
